@@ -1,0 +1,8 @@
+fullon_log
+fullon_orm
+fullon_cache
+fullon_ohlcv
+fullon_exchange
+fullon_orm_api
+fullon_ohlcv_api
+fullon_cache_api
