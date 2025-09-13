@@ -38,6 +38,7 @@ from fullon_orm import init_db, DatabaseContext
 from fullon_orm.models import User, Exchange, CatExchange, Symbol
 from fullon_orm.models.user import RoleEnum
 from fullon_log import get_component_logger
+import redis
 
 # Create fullon logger alongside color output
 fullon_logger = get_component_logger("fullon.ticker.example.demo_data")
@@ -183,12 +184,23 @@ async def test_database_context(db_name: str):
         # Create test database
         if not await create_test_database(db_name):
             raise Exception("Failed to create test database")
-        
+
+        # Clear Redis cache to avoid stale data
+        try:
+            redis_host = os.getenv("REDIS_HOST", "localhost")
+            redis_port = int(os.getenv("REDIS_PORT", "6379"))
+            redis_db = int(os.getenv("REDIS_DB", "0"))
+            r = redis.Redis(host=redis_host, port=redis_port, db=redis_db)
+            r.flushdb()
+            print_info("Cleared Redis cache to avoid stale data")
+        except Exception as e:
+            print_warning(f"Could not clear Redis cache: {e}")
+
         # Initialize schema
         print_info("Initializing database schema...")
         await init_db()
         print_success("Database schema initialized")
-        
+
         yield db_name
         
     finally:

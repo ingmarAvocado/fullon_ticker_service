@@ -14,6 +14,7 @@ from typing import Any
 from fullon_cache import TickCache
 from fullon_exchange.queue import ExchangeQueue
 from fullon_log import get_component_logger
+from fullon_orm import DatabaseContext
 from fullon_orm.models import Tick
 
 logger = get_component_logger("fullon.ticker.exchange_handler")
@@ -74,10 +75,61 @@ class ExchangeHandler:
                 await ExchangeQueue.initialize_factory()
                 self._factory_initialized = True
 
-            # Get unified handler
-            self._handler = await ExchangeQueue.get_handler(
-                self.exchange_name,
-                "ticker_account"
+            # Get the exchange object from database
+            async with DatabaseContext() as db:
+                # First get the category exchange
+                cat_exchanges = await db.exchanges.get_cat_exchanges(all=True)
+                cat_exchange = None
+                for ce in cat_exchanges:
+                    if ce.name.lower() == self.exchange_name.lower():
+                        cat_exchange = ce
+                        break
+
+                if not cat_exchange:
+                    raise ValueError(f"Exchange {self.exchange_name} not found in database")
+
+                # Get or create a user exchange for this category
+                # For ticker service, we just need any user exchange
+                user_exchanges = await db.exchanges.get_user_exchanges(1)  # Using test user
+                exchange_obj = None
+                for ue_dict in user_exchanges:
+                    if ue_dict.get("cat_ex_id") == cat_exchange.cat_ex_id:
+                        # Convert dict to Exchange model
+                        # The dict has: ex_name, ex_id, cat_ex_id, ex_named
+                        from fullon_orm.models import Exchange
+                        exchange_obj = Exchange(
+                            ex_id=ue_dict["ex_id"],
+                            uid=1,  # We know this is user 1
+                            cat_ex_id=ue_dict["cat_ex_id"],
+                            name=ue_dict["ex_named"],  # ex_named is the actual user exchange name
+                            test=True,
+                            active=True
+                        )
+                        # Add the relationship manually
+                        exchange_obj.cat_exchange = cat_exchange
+                        break
+
+                if not exchange_obj:
+                    # Create a temporary exchange object for public ticker access
+                    from fullon_orm.models import Exchange
+                    exchange_obj = Exchange(
+                        uid=1,  # Test user
+                        cat_ex_id=cat_exchange.cat_ex_id,
+                        name=f"{self.exchange_name}_ticker",
+                        test=True,
+                        active=True
+                    )
+                    # Add the relationship manually
+                    exchange_obj.cat_exchange = cat_exchange
+
+            # Get websocket handler for ticker streaming
+            # Provide a credential provider that returns empty credentials for now
+            def credential_provider(exchange):
+                return ("", "")  # No API keys needed for public ticker data
+
+            self._handler = await ExchangeQueue.get_websocket_handler(
+                exchange_obj,
+                credential_provider
             )
 
             # Connect to exchange

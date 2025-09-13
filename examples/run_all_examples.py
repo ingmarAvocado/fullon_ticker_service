@@ -49,7 +49,8 @@ async def run_example(example_path: Path, verbose: bool = False) -> bool:
             sys.executable, str(example_path),
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
-            cwd=str(example_path.parent)
+            cwd=str(example_path.parent),
+            env=os.environ.copy()  # Pass current environment to subprocess
         )
         
         stdout, stderr = await proc.communicate()
