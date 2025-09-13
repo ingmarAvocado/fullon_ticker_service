@@ -1054,7 +1054,7 @@ resolved_reference = "9d1f5c35de004d719e683d7d8f1b0c20420420d5"
 
 [[package]]
 name = "fullon-exchange"
-version = "0.8.9"
+version = "0.8.10"
 description = "Modern Python library for cryptocurrency exchange integration with advanced features"
 optional = false
 python-versions = "^3.13"
@@ -1066,7 +1066,6 @@ develop = false
 aiofiles = "^24.1.0"
 aiohttp-socks = "^0.10.1"
 ccxt = "^4.0.0"
-fullon-log = {git = "ssh://git@github.com/ingmarAvocado/fullon_log.git"}
 fullon-orm = {git = "ssh://git@github.com/ingmarAvocado/fullon_orm.git", branch = "main"}
 pkginfo = "^1.12.1"
 psutil = "^7.0.0"
@@ -1079,7 +1078,7 @@ websockets = "^15.0.1"
 type = "git"
 url = "ssh://git@github.com/ingmarAvocado/fullon_exchange.git"
 reference = "main"
-resolved_reference = "69a2412fbfe5970dbf3cf28ffd519782b526b5fd"
+resolved_reference = "c8c568be879d58393f660da2486cacda6e64dab4"
 
 [[package]]
 name = "fullon-log"
