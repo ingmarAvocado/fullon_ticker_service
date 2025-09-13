@@ -8,7 +8,12 @@ and implement custom callback to save to fullon_cache.
 
 import asyncio
 import time
-from fullon_exchange import Exchange
+# Use our Exchange adapter instead of non-existent fullon_exchange.Exchange
+try:
+    from fullon_exchange import Exchange
+except ImportError:
+    # Fall back to our adapter
+    from fullon_ticker_service.exchange_adapter import Exchange
 from fullon_cache import TickCache
 from fullon_log import get_component_logger
 from fullon_orm.models.tick import Tick

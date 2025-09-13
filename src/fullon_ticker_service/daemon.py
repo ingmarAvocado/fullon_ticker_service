@@ -6,6 +6,7 @@ and handles health monitoring and process registration.
 """
 
 import asyncio
+import signal
 from enum import Enum
 from typing import Any
 
@@ -147,10 +148,22 @@ class TickerDaemon:
 
         Minimal for Issue #1: acts as a heartbeat while running.
         """
+        shutdown_event = asyncio.Event()
+
+        def signal_shutdown():
+            shutdown_event.set()
+
+        # Handle shutdown signals
+        for sig in [signal.SIGINT, signal.SIGTERM]:
+            signal.signal(sig, lambda s, f: signal_shutdown())
+
         try:
-            while self._running:
-                # Lightweight sleep; in future issues, poll symbols/handlers here.
-                await asyncio.sleep(0.5)
+            # Wait for shutdown signal or manual stop
+            while self._running and not shutdown_event.is_set():
+                await asyncio.wait_for(shutdown_event.wait(), timeout=0.5)
+        except TimeoutError:
+            # Expected timeout - continue loop
+            pass
         except asyncio.CancelledError:
             # Expected during shutdown
             pass
