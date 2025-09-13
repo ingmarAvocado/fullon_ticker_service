@@ -105,6 +105,23 @@ Create actual GitHub repositories with proper structure, then give clear next st
 ### Parallel Development Ready
 **Critical Point**: Since libraries follow LRRS principles, they are 100% isolated and can be developed in parallel. Multiple developers (or LLMs) can work on different libraries simultaneously without conflicts.
 
+### Fullon Ecosystem Integration
+For projects using the fullon trading ecosystem, always reference the comprehensive LLM integration guides:
+
+**📚 Essential Documentation:**
+- `docs/FULLON_ORM_LLM_METHOD_REFERENCE.md` - Complete repository method reference with model-based API patterns
+- `docs/FULLON_ORM_LLM_README.md` - Quick start guide for async SQLAlchemy ORM with repository pattern
+- `docs/FULLON_CACHE_LLM_QUICKSTART.md` - Redis-based caching system for real-time trading data
+- `docs/FULLON_LOG_LLM_README.md` - Component-specific logging patterns and configuration
+- `docs/11_FULLON_EXCHANGE_LLM_README.md` - Unified exchange API with websocket streaming, priority queues, and ORM models
+
+**Critical Integration Points:**
+- **Model-Based API**: Always use fullon_orm models as input/output (not dictionaries)
+- **Repository Pattern**: Use repository methods with proper model instances
+- **Component Logging**: Use `get_component_logger("fullon.component.name")` pattern
+- **Cache Integration**: Use appropriate cache patterns (TickCache, OrdersCache, etc.)
+- **Database Operations**: Follow async patterns with proper session management
+
 ## Repository Structure (Generated)
 
 Each library gets:

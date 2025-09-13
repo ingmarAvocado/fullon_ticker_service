@@ -1,6 +1,6 @@
 [project]
 name = "fullon-ticker-service"
-version = "0.1.0"
+version = "0.1.1"
 description = "Async daemon service for real-time cryptocurrency ticker data collection using websockets"
 authors = [
     {name = "ingmar", email = "ingmar@avocadoblock.com"}
@@ -8,16 +8,16 @@ authors = [
 readme = "README.md"
 requires-python = ">=3.13,<4.0"
 dependencies = [
-    "fullon-orm @ git+ssh://git@github.com/ingmarAvocado/fullon_orm.git",
-    "fullon-log @ git+ssh://git@github.com/ingmarAvocado/fullon_log.git",
-    "fullon-exchange @ git+ssh://git@github.com/ingmarAvocado/fullon_exchange.git",
-    "fullon-cache @ git+ssh://git@github.com/ingmarAvocado/fullon_cache.git",
     "asyncio-mqtt>=0.16.0",
     "aioredis>=2.0.0",
     "pydantic>=2.5.0",
     "click>=8.1.0",
     "uvloop>=0.19.0",
     "python-dotenv>=1.0.0",
+    "fullon-log @ git+ssh://git@github.com/ingmarAvocado/fullon_log.git@main",
+    "fullon-orm @ git+ssh://git@github.com/ingmarAvocado/fullon_orm.git@main",
+    "fullon-cache @ git+ssh://git@github.com/ingmarAvocado/fullon_cache.git@main",
+    "fullon-exchange @ git+ssh://git@github.com/ingmarAvocado/fullon_exchange.git@main",
 ]
 
 [project.optional-dependencies]
@@ -34,8 +34,8 @@ dev = [
     "aioresponses>=0.7.4",
 ]
 
-[project.scripts]
-fullon-ticker = "fullon_ticker_service.cli:main"
+# [project.scripts]
+# fullon-ticker = "fullon_ticker_service.cli:main"  # TODO: Implement in Issue #13
 
 [build-system]
 requires = ["setuptools>=68.0.0", "wheel"]

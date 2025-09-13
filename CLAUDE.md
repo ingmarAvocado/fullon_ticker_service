@@ -20,38 +20,74 @@
 
 ### B. Dependencies & Integration
 
-1. **fullon_exchange**: Use websocket methods for real-time ticker streams
+**CRITICAL**: Use fullon_orm models as input/output throughout. See comprehensive integration guides:
+- 📖 **[docs/FULLON_ORM_LLM_METHOD_REFERENCE.md](docs/FULLON_ORM_LLM_METHOD_REFERENCE.md)** - Complete method reference for all repositories
+- 📖 **[docs/FULLON_CACHE_LLM_QUICKSTART.md](docs/FULLON_CACHE_LLM_QUICKSTART.md)** - TickCache integration patterns
+- 📖 **[docs/FULLON_LOG_LLM_README.md](docs/FULLON_LOG_LLM_README.md)** - Component logging patterns
+- 📖 **[docs/11_FULLON_EXCHANGE_LLM_README.md](docs/11_FULLON_EXCHANGE_LLM_README.md)** - Unified exchange API with websocket streaming, priority queues, and ORM models
+
+1. **fullon_exchange**: Use ExchangeQueue factory pattern for websocket ticker streams
    ```python
-   from fullon_exchange import Exchange
+   from fullon_exchange.queue import ExchangeQueue
    
-   # Get exchange instance
-   exchange = Exchange("binance")
-   
-   # Start websocket ticker stream
-   await exchange.start_ticker_socket(tickers=["BTC/USDT", "ETH/USDT"])
+   # Initialize factory (ALWAYS required)
+   await ExchangeQueue.initialize_factory()
+   try:
+       # Get unified handler
+       handler = await ExchangeQueue.get_handler("binance", "ticker_account")
+       await handler.connect()
+       
+       # Subscribe to ticker stream with callback
+       async def handle_ticker(ticker_data):
+           # Process ticker_data dict and convert to Tick model
+           pass
+       
+       await handler.subscribe_ticker("BTC/USDT", handle_ticker)
+   finally:
+       await ExchangeQueue.shutdown_factory()
    ```
 
-2. **fullon_cache**: Store tickers using TickCache pattern
+2. **fullon_cache**: Store tickers using TickCache pattern with fullon_orm.Tick models
    ```python
    from fullon_cache import TickCache
+   from fullon_orm.models import Tick
+   
+   # Create tick model instance (REQUIRED - not dict!)
+   tick = Tick(
+       symbol="BTC/USDT",
+       exchange="binance",
+       price=50000.0,
+       volume=100.0,
+       time=time.time()
+   )
    
    async with TickCache() as cache:
-       await cache.set_ticker(tick_data)
+       await cache.set_ticker(tick)  # Pass Tick model, not dict!
    ```
 
 3. **fullon_log**: Component-specific logging
    ```python
    from fullon_log import get_component_logger
    
+   # Component-specific logger with structured logging
    logger = get_component_logger("fullon.ticker.daemon")
+   logger.info("Ticker processed", symbol="BTC/USDT", price=50000.0)
    ```
 
-4. **fullon_orm**: Get exchange configs and symbol data
+4. **fullon_orm**: Database operations using repository pattern with model instances
    ```python
    from fullon_orm import DatabaseContext
+   from fullon_orm.models import User, Exchange, Symbol
    
    async with DatabaseContext() as db:
-       exchanges = await db.exchanges.get_all_active()
+       # Get active exchanges (returns List[Exchange])
+       exchanges = await db.exchanges.get_cat_exchanges(all=False)
+       
+       # Get symbols for exchange (returns List[Symbol]) 
+       symbols = await db.symbols.get_by_exchange_id(cat_ex_id=1)
+       
+       # Repository methods use model instances as input/output
+       await db.commit()
    ```
 
 ### C. Core Components Architecture
