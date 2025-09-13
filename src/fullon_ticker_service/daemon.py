@@ -6,8 +6,11 @@ and handles health monitoring and process registration.
 """
 
 import asyncio
-from typing import Dict, List, Optional
+import signal
 from enum import Enum
+from typing import Any
+
+from .exchange_handler import ExchangeHandler
 
 
 class DaemonStatus(Enum):
@@ -22,24 +25,24 @@ class DaemonStatus(Enum):
 class TickerDaemon:
     """
     Main ticker service daemon.
-    
+
     Orchestrates ticker data collection from multiple exchanges using async/await patterns.
     Follows the "smart daemon" pattern where the daemon handles all business logic internally.
     """
-    
-    def __init__(self):
+
+    def __init__(self) -> None:
         """Initialize the ticker daemon."""
         self._status = DaemonStatus.STOPPED
-        self._exchange_handlers: Dict[str, "ExchangeHandler"] = {}
-        self._tasks: List[asyncio.Task] = []
+        self._exchange_handlers: dict[str, ExchangeHandler] = {}
+        self._tasks: list[asyncio.Task] = []
         self._running = False
         self._lock = asyncio.Lock()
-        self._main_task: Optional[asyncio.Task] = None
-    
+        self._main_task: asyncio.Task | None = None
+
     async def start(self) -> None:
         """
         Start the ticker daemon.
-        
+
         This will:
         1. Query fullon_orm for active exchanges and symbols
         2. Create ExchangeHandler instances for each exchange
@@ -60,11 +63,11 @@ class TickerDaemon:
             self._main_task = asyncio.create_task(self._run())
 
             self._status = DaemonStatus.RUNNING
-    
+
     async def stop(self) -> None:
         """
         Stop the ticker daemon gracefully.
-        
+
         This will:
         1. Stop all websocket connections
         2. Cancel all async tasks
@@ -86,10 +89,10 @@ class TickerDaemon:
                     task.cancel()
 
             # Await all cancellations
-            pending: List[asyncio.Task] = []
+            pending: list[asyncio.Task] = []
             if self._main_task is not None:
                 pending.append(self._main_task)
-            pending.extend([t for t in self._tasks])
+            pending.extend(list(self._tasks))
 
             if pending:
                 await asyncio.gather(*pending, return_exceptions=True)
@@ -99,11 +102,11 @@ class TickerDaemon:
             self._main_task = None
             self._running = False
             self._status = DaemonStatus.STOPPED
-    
+
     def is_running(self) -> bool:
         """Check if the daemon is currently running."""
         return self._running
-    
+
     def get_status(self) -> DaemonStatus:
         """Get the current daemon status."""
         return self._status
@@ -116,28 +119,28 @@ class TickerDaemon:
         """
         # Keep non-blocking; aligns with examples/daemon_control.py usage.
         return self._status.value
-    
-    async def get_health(self) -> Dict[str, any]:
+
+    async def get_health(self) -> dict[str, Any]:
         """
         Get health status of the daemon and all exchange handlers.
-        
+
         Returns:
             Dict containing health information for monitoring
         """
-        health = {
+        health: dict[str, Any] = {
             "status": self._status.value,
             "running": self._running,
             "exchanges": {}
         }
-        
+
         # TODO: Gather health from all exchange handlers
-        for exchange_name, handler in self._exchange_handlers.items():
+        for exchange_name, _handler in self._exchange_handlers.items():
             health["exchanges"][exchange_name] = {
                 "connected": False,  # TODO: Get actual status
                 "last_ticker": None,  # TODO: Get last ticker timestamp
                 "reconnects": 0  # TODO: Get reconnection count
             }
-        
+
         return health
 
     async def _run(self) -> None:
@@ -145,10 +148,22 @@ class TickerDaemon:
 
         Minimal for Issue #1: acts as a heartbeat while running.
         """
+        shutdown_event = asyncio.Event()
+
+        def signal_shutdown():
+            shutdown_event.set()
+
+        # Handle shutdown signals
+        for sig in [signal.SIGINT, signal.SIGTERM]:
+            signal.signal(sig, lambda s, f: signal_shutdown())
+
         try:
-            while self._running:
-                # Lightweight sleep; in future issues, poll symbols/handlers here.
-                await asyncio.sleep(0.5)
+            # Wait for shutdown signal or manual stop
+            while self._running and not shutdown_event.is_set():
+                await asyncio.wait_for(shutdown_event.wait(), timeout=0.5)
+        except TimeoutError:
+            # Expected timeout - continue loop
+            pass
         except asyncio.CancelledError:
             # Expected during shutdown
             pass
