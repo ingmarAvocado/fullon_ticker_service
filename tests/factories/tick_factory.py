@@ -1,9 +1,9 @@
 """Tick factory for fullon_ticker_service tests."""
 
-from datetime import datetime
+import time
 from typing import Optional
 
-from fullon_orm.models import Tick, Symbol, Exchange
+from fullon_orm.models import Tick, Symbol, CatExchange
 
 
 class TickFactory:
@@ -11,120 +11,102 @@ class TickFactory:
 
     @classmethod
     def create(
-        self,
+        cls,
         *,
         symbol: Optional[Symbol] = None,
-        exchange: Optional[Exchange] = None,
+        exchange: Optional[CatExchange] = None,
         symbol_str: str = "BTC/USDT",
         exchange_str: str = "binance",
-        bid: float = 50000.0,
-        ask: float = 50001.0,
-        last: float = 50000.5,
-        timestamp: Optional[int] = None,
-        datetime_val: Optional[datetime] = None,
-        high: float = 51000.0,
-        low: float = 49000.0,
-        open: float = 49500.0,
-        close: float = 50000.5,
-        volume: float = 1000.0,
-        quote_volume: float = 50000000.0,
+        price: float = 50000.0,
+        time_val: Optional[float] = None,
+        volume: Optional[float] = 1000.0,
+        bid: Optional[float] = None,
+        ask: Optional[float] = None,
+        last: Optional[float] = None,
+        change: Optional[float] = None,
+        percentage: Optional[float] = None,
         **kwargs
     ) -> Tick:
         """Create a Tick instance with test data.
         
         Args:
             symbol: Symbol instance
-            exchange: Exchange instance
+            exchange: CatExchange instance
             symbol_str: Symbol string (used if symbol not provided)
             exchange_str: Exchange string (used if exchange not provided)
-            bid: Bid price
-            ask: Ask price
-            last: Last traded price
-            timestamp: Unix timestamp in milliseconds
-            datetime_val: Datetime object
-            high: 24h high price
-            low: 24h low price
-            open: 24h open price
-            close: Close price (usually same as last)
+            price: Main price (used for last if not provided)
+            time_val: Unix timestamp in seconds (float)
             volume: Volume in base currency
-            quote_volume: Volume in quote currency
+            bid: Bid price (auto-calculated from price if not provided)
+            ask: Ask price (auto-calculated from price if not provided)
+            last: Last traded price (defaults to price)
+            change: Price change
+            percentage: Percentage change
             **kwargs: Additional fields to override
         """
-        # Default timestamp and datetime
-        if timestamp is None:
-            timestamp = 1704067200000  # 2024-01-01 00:00:00 UTC
-        
-        if datetime_val is None:
-            datetime_val = datetime.fromtimestamp(timestamp / 1000)
+        # Default time
+        if time_val is None:
+            time_val = time.time()
 
         # Use symbol/exchange strings if objects not provided
         final_symbol = symbol.symbol if symbol else symbol_str
         final_exchange = exchange.name if exchange else exchange_str
 
-        tick_data = {
-            "symbol": final_symbol,
-            "exchange": final_exchange,
-            "bid": bid,
-            "ask": ask,
-            "last": last,
-            "timestamp": timestamp,
-            "datetime": datetime_val,
-            "high": high,
-            "low": low,
-            "open": open,
-            "close": close,
-            "volume": volume,
-            "quoteVolume": quote_volume,
-            **kwargs,
-        }
+        # Auto-calculate bid/ask from price if not provided
+        if bid is None:
+            spread = price * 0.0001  # 0.01% spread
+            bid = price - spread / 2
+            
+        if ask is None:
+            spread = price * 0.0001  # 0.01% spread
+            ask = price + spread / 2
+            
+        if last is None:
+            last = price
 
-        return Tick(**tick_data)
+        return Tick(
+            symbol=final_symbol,
+            exchange=final_exchange,
+            price=price,
+            time=time_val,
+            volume=volume,
+            bid=bid,
+            ask=ask,
+            last=last,
+            change=change,
+            percentage=percentage,
+            **kwargs,
+        )
 
     @classmethod
     def create_btc_usdt(
         cls, 
-        exchange: Optional[Exchange] = None,
+        exchange: Optional[CatExchange] = None,
         price: float = 50000.0,
         **kwargs
     ) -> Tick:
         """Create BTC/USDT tick with consistent pricing."""
-        spread = price * 0.0001  # 0.01% spread
         return cls.create(
             symbol_str="BTC/USDT",
-            exchange_str=exchange.name if exchange else "binance",
-            bid=price - spread/2,
-            ask=price + spread/2,
-            last=price,
-            high=price * 1.02,
-            low=price * 0.98,
-            open=price * 0.99,
-            close=price,
+            exchange=exchange,
+            price=price,
             volume=100.0,
-            quote_volume=price * 100.0,
             **kwargs
         )
 
     @classmethod
     def create_eth_usdt(
         cls, 
-        exchange: Optional[Exchange] = None,
+        exchange: Optional[CatExchange] = None,
         price: float = 3500.0,
         **kwargs
     ) -> Tick:
         """Create ETH/USDT tick with consistent pricing."""
-        spread = price * 0.0001  # 0.01% spread
         return cls.create(
             symbol_str="ETH/USDT",
-            exchange_str=exchange.name if exchange else "binance",
-            bid=price - spread/2,
-            ask=price + spread/2,
-            last=price,
-            high=price * 1.02,
-            low=price * 0.98,
-            open=price * 0.99,
-            close=price,
+            exchange=exchange,
+            price=price,
             volume=500.0,
-            quote_volume=price * 500.0,
             **kwargs
         )
 
@@ -140,8 +122,8 @@ class TickFactory:
         spread = price * (spread_percent / 100)
         return cls.create(
             symbol_str=symbol_str,
+            price=price,
             bid=price - spread/2,
             ask=price + spread/2,
-            last=price,
             **kwargs
         )
