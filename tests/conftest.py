@@ -123,7 +123,7 @@ async def get_or_create_worker_engine(db_name: str) -> Any:
 
 
 # ============================================================================
-# ROLLBACK-BASED TEST ISOLATION (like fullon_orm)
+# ROLLBACK-BASED TEST ISOLATION (like fullon_orm_api)
 # ============================================================================
 
 
@@ -201,7 +201,7 @@ async def create_rollback_database_context(request) -> AsyncGenerator[TestDataba
     - Lightning-fast flush + auto-rollback pattern
     - Perfect test isolation via transaction rollback
     - Zero explicit cleanup - SQLAlchemy handles it automatically
-    - Same interface as DatabaseContext for ticker service testing
+    - Same interface as DatabaseContext
     """
     # Get database name for this module
     db_name = get_worker_db_name(request)
@@ -216,7 +216,7 @@ async def create_rollback_database_context(request) -> AsyncGenerator[TestDataba
         expire_on_commit=False,
     )
 
-    # Create a session and use savepoint pattern like fullon_orm
+    # Create a session and use savepoint pattern like fullon_orm_api
     async with async_session_maker() as session:
         # Start a main transaction
         await session.begin()
@@ -227,12 +227,11 @@ async def create_rollback_database_context(request) -> AsyncGenerator[TestDataba
         # Create test database context wrapper
         db = TestDatabaseContext(session)
 
-        yield db
-
-        # Flush for immediate data visibility during testing
-        await session.flush()
-
-        # That's it! Context exit automatically rolls back everything
+        try:
+            yield db
+        finally:
+            # Explicitly rollback to the savepoint
+            await session.rollback()
 
 
 # ============================================================================
@@ -263,13 +262,47 @@ def event_loop():
         pass  # Ignore cleanup errors
 
 
+def clear_all_caches():
+    """Aggressively clear all caches for test isolation."""
+    try:
+        from fullon_orm.cache import cache_manager, cache_region
+
+        # Clear all caches completely
+        cache_manager.invalidate_exchange_caches()
+        cache_manager.invalidate_symbol_caches()
+
+        # Force clear the entire cache region to ensure no stale data
+        cache_region.invalidate(hard=True)
+
+        # If Redis backend is available, flush it completely
+        if hasattr(cache_region.backend, 'writer_client'):
+            redis_client = cache_region.backend.writer_client
+            redis_client.flushdb()
+        elif hasattr(cache_region.backend, 'client'):
+            redis_client = cache_region.backend.client
+            redis_client.flushdb()
+
+    except Exception:
+        pass  # Ignore cache errors
+
+
 @pytest_asyncio.fixture
 async def db_context(request) -> AsyncGenerator[TestDatabaseContext]:
     """Database context fixture using rollback-based isolation like fullon_orm."""
     try:
+        # Clear cache before test
+        clear_all_caches()
+
         async with create_rollback_database_context(request) as db:
             yield db
+
+        # Clear cache after test to prevent interference
+        clear_all_caches()
+
     except Exception as e:
+        # Always clear cache on error too
+        clear_all_caches()
+
         # Enhanced error handling for cleanup issues
         import traceback
 

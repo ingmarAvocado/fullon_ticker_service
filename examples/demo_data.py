@@ -176,7 +176,7 @@ async def test_database_context(db_name: str):
     user = os.getenv("DB_USER", "postgres")
     password = os.getenv("DB_PASSWORD", "")
     
-    test_db_url = f"postgresql://{user}:{password}@{host}:{port}/{db_name}"
+    test_db_url = f"postgresql+asyncpg://{user}:{password}@{host}:{port}/{db_name}"
     os.environ['DATABASE_URL'] = test_db_url
     
     try:
@@ -438,7 +438,7 @@ async def main():
         print_info(f"\nTo cleanup later, run: python {sys.argv[0]} --cleanup {db_name}")
         
     elif args.cleanup:
-        success = drop_test_database(args.cleanup)
+        success = await drop_test_database(args.cleanup)
         sys.exit(0 if success else 1)
         
     elif args.run_all:

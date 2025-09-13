@@ -8,7 +8,8 @@ Includes process registration in fullon_cache for monitoring.
 
 import asyncio
 from fullon_ticker_service import TickerDaemon
-from fullon_cache import Cache
+from fullon_cache import ProcessCache
+from fullon_cache.process_cache import ProcessType
 from fullon_log import get_component_logger
 
 logger = get_component_logger("fullon.ticker.example.daemon_control")
@@ -29,25 +30,23 @@ async def main():
     logger.info("Ticker daemon started successfully")
     
     # Register process in cache for monitoring
-    async with Cache() as cache:
-        await cache.new_process(
-            tipe="ticker_service",
-            key="ticker_daemon", 
-            pid=f"async:{id(ticker_daemon)}",
-            params=["ticker_daemon"],
+    async with ProcessCache() as cache:
+        process_id = await cache.register_process(
+            process_type=ProcessType.TICK,
+            component="ticker_daemon",
+            params={"daemon_id": id(ticker_daemon)},
             message="Started"
         )
     logger.info("Process registered in cache")
-    
+
     # Check status
     status = await ticker_daemon.status()
     logger.info(f"Daemon status: {status}")
-    
+
     # Update process status
-    async with Cache() as cache:
+    async with ProcessCache() as cache:
         await cache.update_process(
-            tipe="ticker_service",
-            key="ticker_daemon",
+            process_id=process_id,
             message="Running"
         )
     logger.info("Process status updated to 'Running'")
@@ -62,7 +61,7 @@ async def main():
     logger.info("Ticker daemon stopped successfully")
     
     # Clean up process from cache
-    async with Cache() as cache:
+    async with ProcessCache() as cache:
         await cache.delete_from_top(component="ticker_service:ticker_daemon")
     logger.info("Process cleaned up from cache")
     

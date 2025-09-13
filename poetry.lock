@@ -1029,7 +1029,7 @@ files = [
 
 [[package]]
 name = "fullon-cache"
-version = "0.5.1"
+version = "0.5.4"
 description = "Cache module for Fullon trading system"
 optional = false
 python-versions = ">=3.13,<4.0"
@@ -1038,8 +1038,8 @@ files = []
 develop = false
 
 [package.dependencies]
-fullon-log = {git = "ssh://git@github.com/ingmarAvocado/fullon_log.git"}
-fullon-orm = {git = "ssh://git@github.com/ingmarAvocado/fullon_orm.git"}
+fullon-log = {git = "ssh://git@github.com/ingmarAvocado/fullon_log.git", rev = "main"}
+fullon-orm = {git = "ssh://git@github.com/ingmarAvocado/fullon_orm.git", rev = "main"}
 redis = {version = ">=6.2.0,<7.0.0", extras = ["hiredis"]}
 
 [package.extras]
@@ -1050,11 +1050,11 @@ uvloop = ["uvloop (>=0.20.0) ; sys_platform != \"win32\""]
 type = "git"
 url = "ssh://git@github.com/ingmarAvocado/fullon_cache.git"
 reference = "main"
-resolved_reference = "9d1f5c35de004d719e683d7d8f1b0c20420420d5"
+resolved_reference = "8b9268ad9ccacb1adeb65d286f1a4b780b0953df"
 
 [[package]]
 name = "fullon-exchange"
-version = "0.8.10"
+version = "0.9.2"
 description = "Modern Python library for cryptocurrency exchange integration with advanced features"
 optional = false
 python-versions = "^3.13"
@@ -1066,7 +1066,7 @@ develop = false
 aiofiles = "^24.1.0"
 aiohttp-socks = "^0.10.1"
 ccxt = "^4.0.0"
-fullon-orm = {git = "ssh://git@github.com/ingmarAvocado/fullon_orm.git", branch = "main"}
+fullon-orm = {git = "ssh://git@github.com/ingmarAvocado/fullon_orm.git", rev = "main"}
 pkginfo = "^1.12.1"
 psutil = "^7.0.0"
 pydantic = "^2.0"
@@ -1078,7 +1078,7 @@ websockets = "^15.0.1"
 type = "git"
 url = "ssh://git@github.com/ingmarAvocado/fullon_exchange.git"
 reference = "main"
-resolved_reference = "c8c568be879d58393f660da2486cacda6e64dab4"
+resolved_reference = "b19569e2ff7b451a93d466af5216f54b8e8a0086"
 
 [[package]]
 name = "fullon-log"
@@ -1096,12 +1096,12 @@ loguru = "^0.7.3"
 [package.source]
 type = "git"
 url = "ssh://git@github.com/ingmarAvocado/fullon_log.git"
-reference = "HEAD"
+reference = "main"
 resolved_reference = "55fb61ccab5b386cf4f0d3649e28d20ee12386fd"
 
 [[package]]
 name = "fullon-orm"
-version = "0.7.1"
+version = "0.7.2"
 description = "Async SQLAlchemy ORM for Fullon trading system"
 optional = false
 python-versions = "^3.13"
@@ -1113,7 +1113,7 @@ develop = false
 alembic = "^1.13.0"
 asyncpg = "^0.30.0"
 dogpile-cache = "^1.4.0"
-fullon-log = {git = "ssh://git@github.com/ingmarAvocado/fullon_log.git"}
+fullon-log = {git = "ssh://git@github.com/ingmarAvocado/fullon_log.git", branch = "main"}
 psycopg2-binary = "^2.9.0"
 pydantic = "^2.5.0"
 python-dotenv = "^1.0.0"
@@ -1124,8 +1124,8 @@ uvloop = "^0.21.0"
 [package.source]
 type = "git"
 url = "ssh://git@github.com/ingmarAvocado/fullon_orm.git"
-reference = "HEAD"
-resolved_reference = "6622451d154261c8d9322fc82be413afbcce4ab8"
+reference = "main"
+resolved_reference = "d402d8621974873b29df5e8d1a2934308081afaf"
 
 [[package]]
 name = "future"

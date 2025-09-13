@@ -60,6 +60,10 @@ markers = [
     "slow: marks tests as slow running",
     "websocket: marks tests that use websocket connections",
 ]
+filterwarnings = [
+    "ignore::DeprecationWarning:uvloop.*",
+    "ignore:uvloop.install.*:DeprecationWarning",
+]
 
 [tool.coverage.run]
 source = ["src"]
@@ -126,10 +130,6 @@ strict_equality = true
 
 [[tool.mypy.overrides]]
 module = [
-    "fullon_orm.*",
-    "fullon_log.*",
-    "fullon_exchange.*",
-    "fullon_cache.*",
     "uvloop.*",
 ]
 ignore_missing_imports = true
