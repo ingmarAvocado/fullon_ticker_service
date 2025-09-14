@@ -8,6 +8,7 @@ Tests the complete TickerManager implementation including:
 """
 
 import pytest
+import asyncio
 import time
 from unittest.mock import AsyncMock, MagicMock, patch
 from typing import List, Dict, Any
@@ -359,3 +360,201 @@ class TestTickerManagerCacheIntegration:
             stats = manager.get_ticker_stats()
             assert stats['ticker_counts']['binance'] == 3
             assert stats['total_tickers'] == 3
+
+    async def test_performance_benchmark_under_50ms(self):
+        """Test that ticker processing meets <50ms latency requirement."""
+        manager = TickerManager()
+
+        ticker_data = {
+            'symbol': 'BTC/USDT',
+            'price': 50000.0,
+            'bid': 49995.0,
+            'ask': 50005.0,
+            'volume': 1000.0,
+            'timestamp': time.time()
+        }
+
+        with patch('fullon_ticker_service.ticker_manager.TickCache') as mock_cache_class:
+            mock_cache = AsyncMock()
+            # Simulate realistic cache latency (1-5ms)
+            async def mock_set_ticker(tick):
+                await asyncio.sleep(0.003)  # 3ms
+            mock_cache.set_ticker = mock_set_ticker
+            mock_cache_class.return_value.__aenter__.return_value = mock_cache
+
+            # Measure processing time
+            start_time = time.perf_counter()
+            await manager.process_ticker('binance', ticker_data)
+            elapsed_ms = (time.perf_counter() - start_time) * 1000
+
+            # Assert performance requirement
+            assert elapsed_ms < 50, f"Processing took {elapsed_ms:.2f}ms, should be <50ms"
+
+    async def test_batch_processing_optimization(self):
+        """Test batch processing of multiple tickers for efficiency."""
+        manager = TickerManager()
+
+        # Create 100 ticker updates
+        ticker_batch = [
+            {
+                'symbol': f'COIN{i}/USDT',
+                'price': 100.0 + i,
+                'volume': 1000.0,
+                'timestamp': time.time()
+            }
+            for i in range(100)
+        ]
+
+        with patch('fullon_ticker_service.ticker_manager.TickCache') as mock_cache_class:
+            mock_cache = AsyncMock()
+            mock_cache_class.return_value.__aenter__.return_value = mock_cache
+
+            # Process batch
+            start_time = time.perf_counter()
+            await manager.process_ticker_batch('binance', ticker_batch)
+            elapsed_ms = (time.perf_counter() - start_time) * 1000
+
+            # Should use batch operation
+            mock_cache.set_tickers_batch.assert_called_once()
+
+            # Verify all tickers processed
+            stats = manager.get_ticker_stats()
+            assert stats['ticker_counts']['binance'] == 100
+
+            # Batch processing should be efficient
+            assert elapsed_ms < 500, f"Batch of 100 took {elapsed_ms:.2f}ms"
+
+    async def test_error_recovery_cache_failure(self):
+        """Test recovery from cache connection failures."""
+        manager = TickerManager()
+
+        ticker_data = {
+            'symbol': 'BTC/USDT',
+            'price': 50000.0,
+            'timestamp': time.time()
+        }
+
+        with patch('fullon_ticker_service.ticker_manager.TickCache') as mock_cache_class:
+            mock_cache = AsyncMock()
+
+            # Simulate cache failure then recovery
+            call_count = 0
+            async def failing_set_ticker(tick):
+                nonlocal call_count
+                call_count += 1
+                if call_count == 1:
+                    raise ConnectionError("Redis connection lost")
+                return True
+
+            mock_cache.set_ticker = failing_set_ticker
+            mock_cache_class.return_value.__aenter__.return_value = mock_cache
+
+            # Should retry and succeed
+            await manager.process_ticker_with_retry('binance', ticker_data)
+
+            # Verify retry happened
+            assert call_count == 2
+
+            # Check error metrics
+            stats = manager.get_ticker_stats()
+            assert stats.get('error_counts', {}).get('binance', 0) == 1
+            assert stats.get('recovery_counts', {}).get('binance', 0) == 1
+
+    async def test_error_recovery_validation_failures(self):
+        """Test handling of data validation errors with recovery."""
+        manager = TickerManager()
+
+        # Mix of valid and invalid ticker data
+        ticker_batch = [
+            {'symbol': 'BTC/USDT', 'price': 50000.0, 'timestamp': time.time()},  # Valid
+            {'symbol': 'ETH/USDT'},  # Missing price
+            {'price': 3500.0, 'timestamp': time.time()},  # Missing symbol
+            {'symbol': 'SOL/USDT', 'price': 100.0, 'timestamp': time.time()},  # Valid
+        ]
+
+        with patch('fullon_ticker_service.ticker_manager.TickCache') as mock_cache_class:
+            mock_cache = AsyncMock()
+            mock_cache_class.return_value.__aenter__.return_value = mock_cache
+
+            # Process batch with validation
+            result = await manager.process_ticker_batch_with_validation('binance', ticker_batch)
+
+            # Should process only valid tickers
+            assert result['processed'] == 2
+            assert result['failed'] == 2
+            assert len(result['errors']) == 2
+
+            # Check that valid tickers were stored
+            assert mock_cache.set_ticker.call_count == 2 or mock_cache.set_tickers_batch.call_count == 1
+
+    async def test_high_throughput_performance(self):
+        """Test handling 1000+ tickers per second per exchange."""
+        manager = TickerManager()
+
+        # Create 1000 tickers
+        ticker_batch = [
+            {
+                'symbol': f'COIN{i}/USDT',
+                'price': 100.0 + (i * 0.01),
+                'volume': 1000.0 + i,
+                'timestamp': time.time()
+            }
+            for i in range(1000)
+        ]
+
+        with patch('fullon_ticker_service.ticker_manager.TickCache') as mock_cache_class:
+            mock_cache = AsyncMock()
+            # Simulate realistic batch operation
+            async def mock_batch_set(ticks):
+                await asyncio.sleep(0.010)  # 10ms for batch
+            mock_cache.set_tickers_batch = mock_batch_set
+            mock_cache_class.return_value.__aenter__.return_value = mock_cache
+
+            # Process 1000 tickers
+            start_time = time.perf_counter()
+            await manager.process_ticker_batch('binance', ticker_batch)
+            elapsed_seconds = time.perf_counter() - start_time
+
+            # Calculate throughput
+            throughput = 1000 / elapsed_seconds if elapsed_seconds > 0 else 0
+
+            # Should handle 1000+ tickers per second
+            assert throughput > 1000, f"Throughput {throughput:.0f}/s, should be >1000/s"
+
+            # Verify all processed
+            stats = manager.get_ticker_stats()
+            assert stats['ticker_counts']['binance'] == 1000
+
+    async def test_performance_monitoring_metrics(self):
+        """Test performance monitoring and metrics collection."""
+        manager = TickerManager()
+
+        ticker_data = {
+            'symbol': 'BTC/USDT',
+            'price': 50000.0,
+            'timestamp': time.time()
+        }
+
+        with patch('fullon_ticker_service.ticker_manager.TickCache') as mock_cache_class:
+            mock_cache = AsyncMock()
+            mock_cache_class.return_value.__aenter__.return_value = mock_cache
+
+            # Process several tickers
+            for _ in range(5):
+                await manager.process_ticker('binance', ticker_data)
+
+            # Get performance metrics
+            metrics = manager.get_performance_metrics()
+
+            # Should have performance data
+            assert 'binance' in metrics
+            assert 'avg_latency_ms' in metrics['binance']
+            assert 'min_latency_ms' in metrics['binance']
+            assert 'max_latency_ms' in metrics['binance']
+            assert 'p99_latency_ms' in metrics['binance']
+            assert 'total_processed' in metrics['binance']
+            assert metrics['binance']['total_processed'] == 5
+
+            # Latencies should be reasonable
+            assert metrics['binance']['avg_latency_ms'] < 50
+            assert metrics['binance']['p99_latency_ms'] < 100
