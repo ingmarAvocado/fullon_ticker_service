@@ -5,6 +5,7 @@ Handles cache integration, symbol management per exchange, and process health re
 Coordinates between exchange handlers and storage systems.
 """
 
+import asyncio
 import time
 from datetime import datetime
 from typing import Any
@@ -30,6 +31,9 @@ class TickerManager:
         self._active_symbols: dict[str, list[str]] = {}  # exchange -> symbols
         self._last_symbol_refresh: datetime | None = None
         self._ticker_count: dict[str, int] = {}  # exchange -> count
+        self._error_counts: dict[str, int] = {}  # exchange -> error count
+        self._recovery_counts: dict[str, int] = {}  # exchange -> recovery count
+        self._latency_samples: dict[str, list[float]] = {}  # exchange -> latency samples
 
     async def process_ticker(self, exchange_name: str, ticker_data: dict[str, Any]) -> None:
         """
@@ -45,6 +49,8 @@ class TickerManager:
             exchange_name: Name of the exchange
             ticker_data: Raw ticker data dict from exchange
         """
+        start_time = time.perf_counter()
+
         # Validate required fields
         if not ticker_data or 'symbol' not in ticker_data:
             logger.warning(
@@ -86,11 +92,21 @@ class TickerManager:
                 self._ticker_count[exchange_name] = 0
             self._ticker_count[exchange_name] += 1
 
+            # Track latency
+            latency_ms = (time.perf_counter() - start_time) * 1000
+            if exchange_name not in self._latency_samples:
+                self._latency_samples[exchange_name] = []
+            self._latency_samples[exchange_name].append(latency_ms)
+            # Keep only last 1000 samples for memory efficiency
+            if len(self._latency_samples[exchange_name]) > 1000:
+                self._latency_samples[exchange_name] = self._latency_samples[exchange_name][-1000:]
+
             logger.debug(
                 "Ticker processed",
                 exchange=exchange_name,
                 symbol=tick.symbol,
-                price=tick.price
+                price=tick.price,
+                latency_ms=f"{latency_ms:.2f}"
             )
 
         except Exception as e:
@@ -100,6 +116,8 @@ class TickerManager:
                 error=str(e),
                 ticker_data=ticker_data
             )
+            # Re-raise for retry logic
+            raise
 
     async def refresh_symbols(self) -> dict[str, list[str]]:
         """
@@ -198,6 +216,8 @@ class TickerManager:
             'exchanges': list(self._active_symbols.keys()),
             'ticker_counts': self._ticker_count.copy(),
             'total_tickers': sum(self._ticker_count.values()),
+            'error_counts': self._error_counts.copy(),
+            'recovery_counts': self._recovery_counts.copy(),
             'last_symbol_refresh': self._last_symbol_refresh.isoformat() if self._last_symbol_refresh else None,
             'active_symbols_count': {
                 exchange: len(symbols)
@@ -323,4 +343,230 @@ class TickerManager:
                 error=str(e)
             )
             return []
+
+    async def process_ticker_batch(self, exchange_name: str, ticker_batch: list[dict[str, Any]]) -> None:
+        """
+        Process a batch of tickers efficiently.
+
+        Args:
+            exchange_name: Name of the exchange
+            ticker_batch: List of ticker data dicts
+        """
+        if not ticker_batch:
+            return
+
+        start_time = time.perf_counter()
+        valid_ticks = []
+
+        for ticker_data in ticker_batch:
+            # Validate and transform
+            if not ticker_data or 'symbol' not in ticker_data:
+                continue
+            if 'price' not in ticker_data and 'last' not in ticker_data:
+                continue
+
+            try:
+                tick = Tick(
+                    symbol=ticker_data.get('symbol'),
+                    exchange=exchange_name,
+                    price=ticker_data.get('price') or ticker_data.get('last', 0.0),
+                    time=ticker_data.get('timestamp') or ticker_data.get('time'),
+                    volume=ticker_data.get('volume'),
+                    bid=ticker_data.get('bid'),
+                    ask=ticker_data.get('ask'),
+                    last=ticker_data.get('last'),
+                    change=ticker_data.get('change'),
+                    percentage=ticker_data.get('percentage')
+                )
+                valid_ticks.append(tick)
+            except Exception as e:
+                logger.warning(f"Failed to create Tick model: {e}")
+                continue
+
+        if valid_ticks:
+            try:
+                async with TickCache() as cache:
+                    # Use batch operation if available
+                    if hasattr(cache, 'set_tickers_batch'):
+                        await cache.set_tickers_batch(valid_ticks)
+                    else:
+                        # Fallback to individual operations
+                        tasks = [cache.set_ticker(tick) for tick in valid_ticks]
+                        await asyncio.gather(*tasks, return_exceptions=True)
+
+                # Update metrics
+                if exchange_name not in self._ticker_count:
+                    self._ticker_count[exchange_name] = 0
+                self._ticker_count[exchange_name] += len(valid_ticks)
+
+                # Track batch latency
+                latency_ms = (time.perf_counter() - start_time) * 1000
+                if exchange_name not in self._latency_samples:
+                    self._latency_samples[exchange_name] = []
+                self._latency_samples[exchange_name].append(latency_ms)
+
+                logger.info(
+                    f"Batch processed {len(valid_ticks)} tickers in {latency_ms:.2f}ms",
+                    exchange=exchange_name
+                )
+            except Exception as e:
+                logger.error(f"Failed to store batch: {e}")
+
+    async def process_ticker_with_retry(
+        self, exchange_name: str, ticker_data: dict[str, Any], max_retries: int = 3
+    ) -> None:
+        """
+        Process ticker with retry logic for error recovery.
+
+        Args:
+            exchange_name: Name of the exchange
+            ticker_data: Raw ticker data dict
+            max_retries: Maximum number of retry attempts
+        """
+        retry_count = 0
+        while retry_count < max_retries:
+            try:
+                await self.process_ticker(exchange_name, ticker_data)
+                if retry_count > 0:
+                    # Recovery successful
+                    if exchange_name not in self._recovery_counts:
+                        self._recovery_counts[exchange_name] = 0
+                    self._recovery_counts[exchange_name] += 1
+                    logger.info(f"Recovered after {retry_count} retries", exchange=exchange_name)
+                return
+            except Exception as e:
+                retry_count += 1
+                if exchange_name not in self._error_counts:
+                    self._error_counts[exchange_name] = 0
+                self._error_counts[exchange_name] += 1
+
+                if retry_count < max_retries:
+                    wait_time = 2 ** retry_count  # Exponential backoff
+                    logger.warning(
+                        f"Retry {retry_count}/{max_retries} after {wait_time}s",
+                        exchange=exchange_name,
+                        error=str(e)
+                    )
+                    await asyncio.sleep(wait_time)
+                else:
+                    logger.error(
+                        f"Failed after {max_retries} retries",
+                        exchange=exchange_name,
+                        error=str(e)
+                    )
+                    raise
+
+    async def process_ticker_batch_with_validation(
+        self, exchange_name: str, ticker_batch: list[dict[str, Any]]
+    ) -> dict[str, Any]:
+        """
+        Process batch with detailed validation and error reporting.
+
+        Args:
+            exchange_name: Name of the exchange
+            ticker_batch: List of ticker data dicts
+
+        Returns:
+            Dictionary with processing results and errors
+        """
+        result = {
+            'processed': 0,
+            'failed': 0,
+            'errors': []
+        }
+
+        valid_ticks = []
+        for i, ticker_data in enumerate(ticker_batch):
+            # Validate
+            if not ticker_data or 'symbol' not in ticker_data:
+                result['failed'] += 1
+                result['errors'].append({
+                    'index': i,
+                    'error': 'Missing symbol',
+                    'data': ticker_data
+                })
+                continue
+
+            if 'price' not in ticker_data and 'last' not in ticker_data:
+                result['failed'] += 1
+                result['errors'].append({
+                    'index': i,
+                    'error': 'Missing price',
+                    'data': ticker_data
+                })
+                continue
+
+            try:
+                tick = Tick(
+                    symbol=ticker_data.get('symbol'),
+                    exchange=exchange_name,
+                    price=ticker_data.get('price') or ticker_data.get('last', 0.0),
+                    time=ticker_data.get('timestamp') or ticker_data.get('time'),
+                    volume=ticker_data.get('volume'),
+                    bid=ticker_data.get('bid'),
+                    ask=ticker_data.get('ask'),
+                    last=ticker_data.get('last'),
+                    change=ticker_data.get('change'),
+                    percentage=ticker_data.get('percentage')
+                )
+                valid_ticks.append(tick)
+                result['processed'] += 1
+            except Exception as e:
+                result['failed'] += 1
+                result['errors'].append({
+                    'index': i,
+                    'error': str(e),
+                    'data': ticker_data
+                })
+
+        # Store valid ticks
+        if valid_ticks:
+            try:
+                async with TickCache() as cache:
+                    if hasattr(cache, 'set_tickers_batch'):
+                        await cache.set_tickers_batch(valid_ticks)
+                    else:
+                        for tick in valid_ticks:
+                            await cache.set_ticker(tick)
+
+                # Update metrics
+                if exchange_name not in self._ticker_count:
+                    self._ticker_count[exchange_name] = 0
+                self._ticker_count[exchange_name] += len(valid_ticks)
+            except Exception as e:
+                logger.error(f"Failed to store validated batch: {e}")
+                result['errors'].append({
+                    'error': f"Cache storage failed: {e}"
+                })
+
+        return result
+
+    def get_performance_metrics(self) -> dict[str, Any]:
+        """
+        Get detailed performance metrics for each exchange.
+
+        Returns:
+            Dictionary with performance statistics per exchange
+        """
+        metrics = {}
+
+        for exchange_name, samples in self._latency_samples.items():
+            if not samples:
+                continue
+
+            sorted_samples = sorted(samples)
+            n = len(sorted_samples)
+
+            metrics[exchange_name] = {
+                'avg_latency_ms': sum(sorted_samples) / n,
+                'min_latency_ms': sorted_samples[0],
+                'max_latency_ms': sorted_samples[-1],
+                'p50_latency_ms': sorted_samples[n // 2],
+                'p99_latency_ms': sorted_samples[int(n * 0.99)] if n > 100 else sorted_samples[-1],
+                'total_processed': self._ticker_count.get(exchange_name, 0),
+                'errors': self._error_counts.get(exchange_name, 0),
+                'recoveries': self._recovery_counts.get(exchange_name, 0)
+            }
+
+        return metrics
 
