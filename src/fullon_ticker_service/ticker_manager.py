@@ -124,7 +124,7 @@ class TickerManager:
                 for exchange in exchanges:
                     # Get symbols for this exchange
                     symbols = await db.symbols.get_by_exchange_id(
-                        cat_ex_id=exchange.cat_ex_id
+                        exchange_id=exchange.cat_ex_id
                     )
 
                     # Extract symbol strings
