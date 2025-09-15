@@ -18,6 +18,7 @@ dependencies = [
     "fullon-orm @ git+ssh://git@github.com/ingmarAvocado/fullon_orm.git@main",
     "fullon-cache @ git+ssh://git@github.com/ingmarAvocado/fullon_cache.git@main",
     "fullon-exchange @ git+ssh://git@github.com/ingmarAvocado/fullon_exchange.git@main",
+    "fullon-credentials @ git+ssh://git@github.com/ingmarAvocado/fullon_credentials.git@main",
 ]
 
 [project.optional-dependencies]

@@ -25,26 +25,34 @@
 - 📖 **[docs/FULLON_CACHE_LLM_QUICKSTART.md](docs/FULLON_CACHE_LLM_QUICKSTART.md)** - TickCache integration patterns
 - 📖 **[docs/FULLON_LOG_LLM_README.md](docs/FULLON_LOG_LLM_README.md)** - Component logging patterns
 - 📖 **[docs/11_FULLON_EXCHANGE_LLM_README.md](docs/11_FULLON_EXCHANGE_LLM_README.md)** - Unified exchange API with websocket streaming, priority queues, and ORM models
+- 📖 **[docs/FULLON_CREDENTIALS_LLM_README.md](docs/FULLON_CREDENTIALS_LLM_README.md)** - Secure credential resolver for exchange API keys
 
 1. **fullon_exchange**: Use ExchangeQueue factory pattern for websocket ticker streams
    ```python
    from fullon_exchange.queue import ExchangeQueue
+   from fullon_credentials import fullon_credentials
 
    # Initialize factory (ALWAYS required)
    await ExchangeQueue.initialize_factory()
    try:
        # Create exchange object and credential provider
        class SimpleExchange:
-           def __init__(self, exchange_name: str, account_id: str):
-               self.ex_id = f"{exchange_name}_{account_id}"
+           def __init__(self, exchange_name: str, account_id: str, ex_id: int):
+               self.ex_id = ex_id  # Use real exchange ID from database
                self.uid = account_id
                self.test = False
                self.cat_exchange = type('CatExchange', (), {'name': exchange_name})()
 
-       exchange_obj = SimpleExchange("binance", "ticker_account")
+       exchange_obj = SimpleExchange("binance", "ticker_account", ex_id=1)
 
        def credential_provider(exchange_obj):
-           return "", ""  # Public ticker streams don't need credentials
+           try:
+               # Get real API credentials using fullon_credentials
+               secret, key = fullon_credentials(ex_id=exchange_obj.ex_id)
+               return (key, secret)  # Return in (api_key, secret) format
+           except ValueError:
+               # Fallback to public access for ticker data
+               return ("", "")  # Public ticker streams work without credentials
 
        # Get websocket handler for ticker streaming
        handler = await ExchangeQueue.get_websocket_handler(exchange_obj, credential_provider)
@@ -91,16 +99,31 @@
    ```python
    from fullon_orm import DatabaseContext
    from fullon_orm.models import User, Exchange, Symbol
-   
+
    async with DatabaseContext() as db:
        # Get active exchanges (returns List[Exchange])
        exchanges = await db.exchanges.get_cat_exchanges(all=False)
-       
-       # Get symbols for exchange (returns List[Symbol]) 
+
+       # Get symbols for exchange (returns List[Symbol])
        symbols = await db.symbols.get_by_exchange_id(cat_ex_id=1)
-       
+
        # Repository methods use model instances as input/output
        await db.commit()
+   ```
+
+5. **fullon_credentials**: Secure credential resolution for exchange API keys
+   ```python
+   from fullon_credentials import fullon_credentials
+
+   # Get API credentials by exchange ID
+   try:
+       secret, key = fullon_credentials(ex_id=1)
+       # Returns (secret: str, key: str) tuple
+       # Use these for authenticated exchange connections
+   except ValueError:
+       # No credentials found for this exchange ID
+       # Fallback to public access if supported
+       pass
    ```
 
 ### C. Core Components Architecture
