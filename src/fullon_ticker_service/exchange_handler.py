@@ -12,6 +12,7 @@ from enum import Enum
 from typing import Any
 
 from fullon_cache import TickCache
+from fullon_credentials import fullon_credentials
 from fullon_exchange.queue import ExchangeQueue
 from fullon_log import get_component_logger
 from fullon_orm import DatabaseContext
@@ -123,9 +124,26 @@ class ExchangeHandler:
                     exchange_obj.cat_exchange = cat_exchange
 
             # Get websocket handler for ticker streaming
-            # Provide a credential provider that returns empty credentials for now
+            # Use fullon_credentials to get real API credentials with fallback to public access
             def credential_provider(exchange):
-                return ("", "")  # No API keys needed for public ticker data
+                try:
+                    # Use exchange.ex_id to get real credentials from fullon_credentials
+                    secret, key = fullon_credentials(ex_id=exchange.ex_id)
+                    logger.info(
+                        f"Retrieved credentials for exchange {exchange.ex_id}",
+                        exchange_id=exchange.ex_id,
+                        exchange_name=self.exchange_name
+                    )
+                    return (key, secret)  # Return in (api_key, secret) format for ExchangeQueue
+                except ValueError as e:
+                    # Fallback to empty credentials for public ticker data access
+                    logger.info(
+                        f"No credentials found for exchange {exchange.ex_id}, using public access for ticker data",
+                        exchange_id=exchange.ex_id,
+                        exchange_name=self.exchange_name,
+                        reason=str(e)
+                    )
+                    return ("", "")  # Public ticker streams work with empty credentials
 
             self._handler = await ExchangeQueue.get_websocket_handler(
                 exchange_obj,

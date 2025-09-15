@@ -166,7 +166,7 @@ async def drop_test_database(db_name: str) -> bool:
 
 
 @asynccontextmanager
-async def test_database_context(db_name: str):
+async def database_context_for_test(db_name: str):
     """Context manager for test database lifecycle (following fullon_orm_api pattern)"""
     # Set environment variable for this test database
     original_db_name = os.getenv('DATABASE_URL', '')
@@ -402,7 +402,7 @@ async def setup_demo_environment():
     """Setup demo environment with test database and data"""
     test_db_name = generate_test_db_name()
     
-    async with test_database_context(test_db_name):
+    async with database_context_for_test(test_db_name):
         await install_demo_data()
         print_success(f"\nDemo environment ready!")
         print_info(f"Test database: {test_db_name}")
@@ -415,7 +415,7 @@ async def run_full_demo():
     """Setup, run examples, and cleanup"""
     test_db_name = generate_test_db_name()
     
-    async with test_database_context(test_db_name):
+    async with database_context_for_test(test_db_name):
         await install_demo_data()
         success = await run_examples()
         

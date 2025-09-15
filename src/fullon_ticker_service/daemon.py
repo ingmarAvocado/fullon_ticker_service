@@ -6,6 +6,7 @@ and handles health monitoring and process registration.
 """
 
 import asyncio
+import os
 import signal
 from enum import Enum
 from typing import Any
@@ -19,6 +20,9 @@ from .exchange_handler import ExchangeHandler, ConnectionStatus
 from .ticker_manager import TickerManager
 
 logger = get_component_logger("fullon.ticker.daemon")
+
+# Symbol refresh interval in seconds (default 5 minutes, configurable via env)
+SYMBOL_REFRESH_INTERVAL = int(os.environ.get('TICKER_SYMBOL_REFRESH_INTERVAL', '300'))
 
 
 class DaemonStatus(Enum):
@@ -49,6 +53,7 @@ class TickerDaemon:
         self._ticker_manager: TickerManager | None = None
         self._process_id: str | None = None
         self._supervision_task: asyncio.Task | None = None
+        self._symbol_refresh_task: asyncio.Task | None = None
 
     async def start(self) -> None:
         """
@@ -86,9 +91,13 @@ class TickerDaemon:
                 # Launch supervision task for monitoring handlers
                 self._supervision_task = asyncio.create_task(self._supervise_handlers())
 
+                # Launch symbol refresh task
+                self._symbol_refresh_task = asyncio.create_task(self._symbol_refresh_loop())
+
                 self._status = DaemonStatus.RUNNING
                 logger.info("Ticker daemon started successfully",
-                           handlers=len(self._exchange_handlers))
+                           handlers=len(self._exchange_handlers),
+                           symbol_refresh_interval=SYMBOL_REFRESH_INTERVAL)
 
             except Exception as e:
                 logger.error(f"Failed to start ticker daemon: {e}")
@@ -120,6 +129,10 @@ class TickerDaemon:
             if self._supervision_task and not self._supervision_task.done():
                 self._supervision_task.cancel()
 
+            # Cancel symbol refresh task
+            if self._symbol_refresh_task and not self._symbol_refresh_task.done():
+                self._symbol_refresh_task.cancel()
+
             # Cancel main task
             if self._main_task and not self._main_task.done():
                 self._main_task.cancel()
@@ -135,6 +148,8 @@ class TickerDaemon:
                 pending.append(self._main_task)
             if self._supervision_task is not None:
                 pending.append(self._supervision_task)
+            if self._symbol_refresh_task is not None:
+                pending.append(self._symbol_refresh_task)
             pending.extend(list(self._tasks))
 
             if pending:
@@ -147,6 +162,7 @@ class TickerDaemon:
             self._tasks.clear()
             self._main_task = None
             self._supervision_task = None
+            self._symbol_refresh_task = None
             self._exchange_handlers.clear()
             self._ticker_manager = None
             self._running = False
@@ -188,10 +204,12 @@ class TickerDaemon:
 
         This will:
         1. Query database for updated symbol lists
-        2. Update exchange handlers with new symbols
-        3. Handle subscribe/unsubscribe operations
+        2. Compare with current active symbols to detect changes
+        3. Update exchange handlers with new symbols (add/remove subscriptions)
+        4. Handle errors gracefully without disrupting service
         """
         if not self._ticker_manager:
+            logger.warning("Cannot refresh symbols: ticker manager not initialized")
             return
 
         logger.info("Refreshing symbols from database")
@@ -200,16 +218,63 @@ class TickerDaemon:
             # Get updated symbol map from database
             symbol_map = await self._ticker_manager.refresh_symbols()
 
+            # Track statistics
+            total_added = 0
+            total_removed = 0
+
             # Update each exchange handler
-            for exchange_name, symbols in symbol_map.items():
+            for exchange_name, new_symbols in symbol_map.items():
                 if exchange_name in self._exchange_handlers:
                     handler = self._exchange_handlers[exchange_name]
-                    await handler.update_symbols(symbols)
-                    logger.info(f"Updated symbols for {exchange_name}",
-                               count=len(symbols))
+
+                    # Get symbol changes for logging
+                    changes = self._ticker_manager.get_symbol_changes(
+                        exchange_name, new_symbols
+                    )
+
+                    added_count = len(changes['added'])
+                    removed_count = len(changes['removed'])
+
+                    if added_count > 0 or removed_count > 0:
+                        logger.info(f"Symbol changes detected for {exchange_name}",
+                                   exchange=exchange_name,
+                                   added=added_count,
+                                   removed=removed_count,
+                                   added_symbols=changes['added'][:5],  # Log first 5
+                                   removed_symbols=changes['removed'][:5])
+
+                    # Update handler subscriptions dynamically
+                    try:
+                        await handler.update_symbols(new_symbols)
+                        total_added += added_count
+                        total_removed += removed_count
+
+                        logger.info(f"Successfully updated symbols for {exchange_name}",
+                                   exchange=exchange_name,
+                                   total_symbols=len(new_symbols))
+                    except Exception as e:
+                        logger.error(f"Failed to update symbols for {exchange_name}: {e}",
+                                   exchange=exchange_name,
+                                   error=str(e))
+                        # Continue with other exchanges
+                else:
+                    # New exchange detected in database
+                    logger.info(f"New exchange {exchange_name} detected during refresh",
+                               exchange=exchange_name,
+                               symbols=len(new_symbols))
+                    # TODO: Could dynamically add new exchange handler here
+
+            if total_added > 0 or total_removed > 0:
+                logger.info("Symbol refresh completed with changes",
+                           total_added=total_added,
+                           total_removed=total_removed)
+            else:
+                logger.info("Symbol refresh completed with no changes")
 
         except Exception as e:
-            logger.error(f"Failed to refresh symbols: {e}")
+            logger.error(f"Failed to refresh symbols: {e}",
+                       error=str(e),
+                       will_retry=True)
 
     async def get_health(self) -> dict[str, Any]:
         """
@@ -373,6 +438,49 @@ class TickerDaemon:
             logger.debug("Supervision task cancelled")
         except Exception as e:
             logger.error(f"Error in supervision loop: {e}")
+
+    async def _symbol_refresh_loop(self) -> None:
+        """Background task that periodically refreshes symbols from database.
+
+        This task runs every SYMBOL_REFRESH_INTERVAL seconds and:
+        1. Queries the database for updated symbol lists
+        2. Compares with current active symbols
+        3. Dynamically updates exchange handler subscriptions
+        4. Handles errors gracefully to maintain service availability
+        """
+        try:
+            # Initial delay to let the daemon fully start
+            await asyncio.sleep(10)
+
+            while self._running:
+                try:
+                    # Wait for the refresh interval
+                    await asyncio.sleep(SYMBOL_REFRESH_INTERVAL)
+
+                    if not self._running:
+                        break
+
+                    logger.info("Starting periodic symbol refresh",
+                               interval=SYMBOL_REFRESH_INTERVAL)
+
+                    # Perform symbol refresh
+                    await self.refresh_symbols()
+
+                    logger.info("Periodic symbol refresh completed successfully")
+
+                except asyncio.CancelledError:
+                    logger.debug("Symbol refresh task cancelled")
+                    break
+                except Exception as e:
+                    logger.error(f"Error in symbol refresh loop: {e}",
+                               error=str(e),
+                               will_retry_in=SYMBOL_REFRESH_INTERVAL)
+                    # Continue running despite errors
+
+        except asyncio.CancelledError:
+            logger.debug("Symbol refresh loop cancelled")
+        except Exception as e:
+            logger.error(f"Fatal error in symbol refresh loop: {e}")
 
     async def _register_process(self) -> None:
         """Register daemon process in fullon_cache."""

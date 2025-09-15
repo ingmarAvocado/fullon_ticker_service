@@ -8,13 +8,45 @@ and API contracts as specified in Issue #1.
 
 import asyncio
 import pytest
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, patch, MagicMock
 
 from fullon_ticker_service.daemon import TickerDaemon, DaemonStatus
 
 
 class TestTickerDaemonIssue1:
     """Unit tests for Issue #1 TickerDaemon implementation."""
+
+    @pytest.fixture
+    async def mock_daemon_dependencies(self):
+        """Mock all external dependencies for pure unit testing."""
+        with patch('fullon_ticker_service.daemon.DatabaseContext') as mock_db_ctx, \
+             patch('fullon_ticker_service.daemon.ProcessCache') as mock_process_cache, \
+             patch('fullon_ticker_service.daemon.TickerManager') as mock_ticker_manager:
+
+            # Mock database context
+            mock_db = AsyncMock()
+            mock_db.exchanges.get_cat_exchanges = AsyncMock(return_value=[])  # No exchanges for unit tests
+            mock_db.symbols.get_by_exchange_id = AsyncMock(return_value=[])
+            mock_db_ctx.return_value.__aenter__.return_value = mock_db
+            mock_db_ctx.return_value.__aexit__.return_value = None
+
+            # Mock process cache
+            mock_cache = AsyncMock()
+            mock_cache.register = AsyncMock(return_value="tick:ticker_daemon:test123")
+            mock_cache.unregister = AsyncMock()
+            mock_process_cache.return_value.__aenter__.return_value = mock_cache
+            mock_process_cache.return_value.__aexit__.return_value = None
+
+            # Mock ticker manager
+            mock_ticker_manager.return_value = AsyncMock()
+
+            yield {
+                'db_context': mock_db_ctx,
+                'process_cache': mock_process_cache,
+                'ticker_manager': mock_ticker_manager,
+                'db': mock_db,
+                'cache': mock_cache
+            }
 
     def test_daemon_initial_state(self):
         """Test daemon initial state matches Issue #1 requirements."""
@@ -28,25 +60,25 @@ class TestTickerDaemonIssue1:
         assert len(daemon._tasks) == 0
 
     @pytest.mark.asyncio
-    async def test_daemon_start_lifecycle(self):
+    async def test_daemon_start_lifecycle(self, mock_daemon_dependencies):
         """Test daemon start lifecycle from Issue #1."""
         daemon = TickerDaemon()
-        
+
         # Start daemon
         await daemon.start()
-        
+
         # Should be running with background task
         assert daemon.is_running() is True
         assert daemon.get_status() == DaemonStatus.RUNNING
         assert daemon._running is True
         assert daemon._main_task is not None
         assert not daemon._main_task.done()
-        
+
         # Clean up
         await daemon.stop()
 
-    @pytest.mark.asyncio 
-    async def test_daemon_stop_lifecycle(self):
+    @pytest.mark.asyncio
+    async def test_daemon_stop_lifecycle(self, mock_daemon_dependencies):
         """Test daemon stop lifecycle from Issue #1."""
         daemon = TickerDaemon()
         
@@ -62,7 +94,7 @@ class TestTickerDaemonIssue1:
         assert len(daemon._tasks) == 0
 
     @pytest.mark.asyncio
-    async def test_daemon_status_method(self):
+    async def test_daemon_status_method(self, mock_daemon_dependencies):
         """Test async status() method from Issue #1 examples compatibility."""
         daemon = TickerDaemon()
         
@@ -81,7 +113,7 @@ class TestTickerDaemonIssue1:
         assert status == "stopped"
 
     @pytest.mark.asyncio
-    async def test_idempotent_start(self):
+    async def test_idempotent_start(self, mock_daemon_dependencies):
         """Test that start() is idempotent as required by Issue #1."""
         daemon = TickerDaemon()
         
@@ -99,7 +131,7 @@ class TestTickerDaemonIssue1:
         await daemon.stop()
 
     @pytest.mark.asyncio
-    async def test_idempotent_stop(self):
+    async def test_idempotent_stop(self, mock_daemon_dependencies):
         """Test that stop() is idempotent as required by Issue #1."""
         daemon = TickerDaemon()
         
@@ -118,7 +150,7 @@ class TestTickerDaemonIssue1:
         assert daemon.get_status() == DaemonStatus.STOPPED
 
     @pytest.mark.asyncio
-    async def test_background_supervision_task(self):
+    async def test_background_supervision_task(self, mock_daemon_dependencies):
         """Test background supervision task runs as specified in Issue #1."""
         daemon = TickerDaemon()
         
@@ -138,7 +170,7 @@ class TestTickerDaemonIssue1:
         await daemon.stop()
 
     @pytest.mark.asyncio
-    async def test_async_first_architecture(self):
+    async def test_async_first_architecture(self, mock_daemon_dependencies):
         """Test that daemon uses async-first architecture (no threading)."""
         daemon = TickerDaemon()
         
@@ -156,7 +188,7 @@ class TestTickerDaemonIssue1:
         assert active_threads_after == active_threads_before
 
     @pytest.mark.asyncio
-    async def test_examples_daemon_control_api_compatibility(self):
+    async def test_examples_daemon_control_api_compatibility(self, mock_daemon_dependencies):
         """Test API compatibility with examples/daemon_control.py pattern."""
         daemon = TickerDaemon()
         
@@ -193,7 +225,7 @@ class TestTickerDaemonIssue1:
         assert DaemonStatus.ERROR.value == "error"
 
     @pytest.mark.asyncio
-    async def test_minimal_scope_no_premature_integration(self):
+    async def test_minimal_scope_no_premature_integration(self, mock_daemon_dependencies):
         """Test Issue #1 maintains minimal scope without premature integration."""
         daemon = TickerDaemon()
         

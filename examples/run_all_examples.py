@@ -30,7 +30,7 @@ from pathlib import Path
 examples_dir = Path(__file__).parent
 
 from demo_data import (
-    test_database_context, generate_test_db_name, install_demo_data,
+    database_context_for_test, generate_test_db_name, install_demo_data,
     print_header, print_success, print_error, print_info, print_warning,
     Colors
 )
@@ -166,7 +166,7 @@ async def main():
             passed, total = await run_all_examples(args.verbose, args.example)
         else:
             # Use context manager for automatic cleanup
-            async with test_database_context(test_db_name):
+            async with database_context_for_test(test_db_name):
                 await install_demo_data()
                 passed, total = await run_all_examples(args.verbose, args.example)
                 

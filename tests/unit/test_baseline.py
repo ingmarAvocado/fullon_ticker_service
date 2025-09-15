@@ -194,7 +194,11 @@ class TestBaselineInfrastructure:
         # Verify both saved
         assert saved_exchange1.cat_ex_id is not None
         assert saved_exchange2.cat_ex_id is not None
-        
+
+        # Clear cache to ensure fresh data retrieval
+        from fullon_orm.cache import cache_manager
+        cache_manager.invalidate_exchange_caches()
+
         exchanges = await db_context.exchanges.get_cat_exchanges()
         exchange_names = {e.name for e in exchanges}
         assert "exchange1" in exchange_names
