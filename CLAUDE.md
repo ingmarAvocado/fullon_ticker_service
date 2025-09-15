@@ -29,19 +29,32 @@
 1. **fullon_exchange**: Use ExchangeQueue factory pattern for websocket ticker streams
    ```python
    from fullon_exchange.queue import ExchangeQueue
-   
+
    # Initialize factory (ALWAYS required)
    await ExchangeQueue.initialize_factory()
    try:
-       # Get unified handler
-       handler = await ExchangeQueue.get_handler("binance", "ticker_account")
+       # Create exchange object and credential provider
+       class SimpleExchange:
+           def __init__(self, exchange_name: str, account_id: str):
+               self.ex_id = f"{exchange_name}_{account_id}"
+               self.uid = account_id
+               self.test = False
+               self.cat_exchange = type('CatExchange', (), {'name': exchange_name})()
+
+       exchange_obj = SimpleExchange("binance", "ticker_account")
+
+       def credential_provider(exchange_obj):
+           return "", ""  # Public ticker streams don't need credentials
+
+       # Get websocket handler for ticker streaming
+       handler = await ExchangeQueue.get_websocket_handler(exchange_obj, credential_provider)
        await handler.connect()
-       
+
        # Subscribe to ticker stream with callback
        async def handle_ticker(ticker_data):
            # Process ticker_data dict and convert to Tick model
            pass
-       
+
        await handler.subscribe_ticker("BTC/USDT", handle_ticker)
    finally:
        await ExchangeQueue.shutdown_factory()
