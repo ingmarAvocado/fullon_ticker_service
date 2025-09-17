@@ -496,8 +496,8 @@ sys.exit(1)
         """Test final summary report formatting."""
         # Mock mixed results
         async def mock_run_example(path, verbose):
-            # Pass daemon_control and ticker_retrieval, fail callback_override
-            return "callback_override" not in str(path)
+            # Pass daemon_control and daemon_stop, fail ticker_retrieval
+            return "ticker_retrieval" not in str(path)
 
         monkeypatch.setattr("run_all_examples.run_example", mock_run_example)
 
@@ -509,7 +509,7 @@ sys.exit(1)
         # Look for the content without exact color codes
         assert "daemon_control.py" in captured.out
         assert "ticker_retrieval.py" in captured.out
-        assert "callback_override.py" in captured.out
+        assert "daemon_stop.py" in captured.out
         # Look for the symbols (they might have color codes)
         assert "✓" in captured.out
         assert "✗" in captured.out

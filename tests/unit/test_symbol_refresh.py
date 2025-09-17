@@ -26,10 +26,19 @@ class TestSymbolRefresh:
     def mock_database_with_changing_symbols(self):
         """Mock DatabaseContext with changing symbols to simulate updates."""
         with patch('fullon_ticker_service.daemon.DatabaseContext') as mock:
-            # Mock active exchanges
-            mock_exchange = MagicMock()
-            mock_exchange.cat_ex_id = 1
-            mock_exchange.name = "binance"
+            # Mock user exchange (what daemon uses)
+            mock_user_exchange = {
+                'ex_id': 1,
+                'cat_ex_id': 1,
+                'ex_named': 'binance',
+                'user_id': 'admin_user',
+                'exchange_name': 'binance'
+            }
+
+            # Mock category exchange (for name resolution)
+            mock_cat_exchange = MagicMock()
+            mock_cat_exchange.cat_ex_id = 1
+            mock_cat_exchange.name = "binance"
 
             # Initial symbols
             initial_symbol_1 = MagicMock()
@@ -47,10 +56,14 @@ class TestSymbolRefresh:
 
             # Setup context manager with side effects for changing symbols
             mock_db = AsyncMock()
-            mock_db.exchanges.get_cat_exchanges.return_value = [mock_exchange]
-
-            # First call returns initial symbols, second call returns updated symbols
-            mock_db.symbols.get_by_exchange_id.side_effect = [
+            # Mock user lookup
+            mock_db.users.get_user_id.return_value = 'admin_user'
+            # Mock user exchanges (what daemon uses)
+            mock_db.exchanges.get_user_exchanges.return_value = [mock_user_exchange]
+            # Mock category exchanges (for name resolution)
+            mock_db.exchanges.get_cat_exchanges.return_value = [mock_cat_exchange]
+            # Mock symbols (get_all method for the new implementation)
+            mock_db.symbols.get_all.side_effect = [
                 [initial_symbol_1, initial_symbol_2],  # Initial call during start
                 [updated_symbol_1, updated_symbol_3],  # First refresh call
                 [updated_symbol_1, updated_symbol_3],  # Subsequent calls
@@ -95,40 +108,45 @@ class TestSymbolRefresh:
         """Test that symbol refresh task runs periodically."""
         mock_handler_class, mock_handler_instance = mock_exchange_handler
 
-        daemon = TickerDaemon()
+        # Also mock cache manager to avoid cache operations
+        with patch('fullon_orm.cache.cache_manager') as mock_cache_mgr:
+            mock_cache_mgr.region.invalidate.return_value = None
+            mock_cache_mgr.invalidate_exchange_caches.return_value = None
 
-        # Start daemon
-        await daemon.start()
+            daemon = TickerDaemon()
 
-        # Verify daemon is running
-        assert daemon.is_running()
-        assert daemon.get_status() == DaemonStatus.RUNNING
+            # Start daemon
+            await daemon.start()
 
-        # Verify initial handler setup
-        mock_handler_class.assert_called_once_with(
-            exchange_name="binance",
-            symbols=["BTC/USDT", "ETH/USDT"]
-        )
+            # Verify daemon is running
+            assert daemon.is_running()
+            assert daemon.get_status() == DaemonStatus.RUNNING
 
-        # Mock the ticker manager's refresh_symbols to return updated symbols
-        with patch.object(daemon._ticker_manager, 'refresh_symbols', new_callable=AsyncMock) as mock_refresh:
-            mock_refresh.return_value = {"binance": ["BTC/USDT", "XRP/USDT"]}
+            # Verify initial handler setup
+            mock_handler_class.assert_called_once_with(
+                exchange_name="binance",
+                symbols=["BTC/USDT", "ETH/USDT"]
+            )
 
-            # Also mock get_symbol_changes to return the expected changes
-            with patch.object(daemon._ticker_manager, 'get_symbol_changes') as mock_changes:
-                mock_changes.return_value = {'added': ['XRP/USDT'], 'removed': ['ETH/USDT']}
+            # Mock the ticker manager's refresh_symbols to return updated symbols
+            with patch.object(daemon._ticker_manager, 'refresh_symbols', new_callable=AsyncMock) as mock_refresh:
+                mock_refresh.return_value = {"binance": ["BTC/USDT", "XRP/USDT"]}
 
-                # Manually trigger symbol refresh
-                await daemon.refresh_symbols()
+                # Also mock get_symbol_changes to return the expected changes
+                with patch.object(daemon._ticker_manager, 'get_symbol_changes') as mock_changes:
+                    mock_changes.return_value = {'added': ['XRP/USDT'], 'removed': ['ETH/USDT']}
 
-                # Verify update_symbols was called with new symbols
-                mock_handler_instance.update_symbols.assert_called_with(
-                    ["BTC/USDT", "XRP/USDT"]
-                )
+                    # Manually trigger symbol refresh
+                    await daemon.refresh_symbols()
 
-        # Stop daemon
-        await daemon.stop()
-        assert not daemon.is_running()
+                    # Verify update_symbols was called with new symbols
+                    mock_handler_instance.update_symbols.assert_called_with(
+                        ["BTC/USDT", "XRP/USDT"]
+                    )
+
+            # Stop daemon
+            await daemon.stop()
+            assert not daemon.is_running()
 
     @pytest.mark.asyncio
     async def test_symbol_refresh_detects_changes(self):
@@ -190,42 +208,59 @@ class TestSymbolRefresh:
             # Mock same symbols on refresh
             mock_symbol = MagicMock(symbol="BTC/USDT")
 
-            mock_exchange = MagicMock()
-            mock_exchange.cat_ex_id = 1
-            mock_exchange.name = "binance"  # Set as string directly
+            # Mock user exchange
+            mock_user_exchange = {
+                'ex_id': 1,
+                'cat_ex_id': 1,
+                'ex_named': 'binance',
+                'user_id': 'admin_user',
+                'exchange_name': 'binance'
+            }
+
+            # Mock category exchange
+            mock_cat_exchange = MagicMock()
+            mock_cat_exchange.cat_ex_id = 1
+            mock_cat_exchange.name = "binance"
 
             mock_db = AsyncMock()
-            mock_db.exchanges.get_cat_exchanges.return_value = [mock_exchange]
-            mock_db.symbols.get_by_exchange_id.return_value = [mock_symbol]
+            mock_db.users.get_user_id.return_value = 'admin_user'
+            mock_db.exchanges.get_user_exchanges.return_value = [mock_user_exchange]
+            mock_db.exchanges.get_cat_exchanges.return_value = [mock_cat_exchange]
+            mock_db.symbols.get_all.return_value = [mock_symbol]
 
             mock_db_context.return_value.__aenter__.return_value = mock_db
             mock_db_context.return_value.__aexit__.return_value = None
 
-            daemon = TickerDaemon()
+            # Also mock cache manager to avoid cache operations
+            with patch('fullon_orm.cache.cache_manager') as mock_cache_mgr:
+                mock_cache_mgr.region.invalidate.return_value = None
+                mock_cache_mgr.invalidate_exchange_caches.return_value = None
 
-            # Start daemon
-            await daemon.start()
+                daemon = TickerDaemon()
 
-            # Clear the call count from start
-            mock_handler_instance.update_symbols.reset_mock()
+                # Start daemon
+                await daemon.start()
 
-            # Mock the ticker manager's refresh_symbols
-            with patch.object(daemon._ticker_manager, 'refresh_symbols', new_callable=AsyncMock) as mock_refresh:
-                mock_refresh.return_value = {"binance": ["BTC/USDT"]}
+                # Clear the call count from start
+                mock_handler_instance.update_symbols.reset_mock()
 
-                # Mock get_symbol_changes to return no changes
-                with patch.object(daemon._ticker_manager, 'get_symbol_changes') as mock_changes:
-                    mock_changes.return_value = {'added': [], 'removed': []}
+                # Mock the ticker manager's refresh_symbols
+                with patch.object(daemon._ticker_manager, 'refresh_symbols', new_callable=AsyncMock) as mock_refresh:
+                    mock_refresh.return_value = {"binance": ["BTC/USDT"]}
 
-                    # Refresh symbols
-                    await daemon.refresh_symbols()
+                    # Mock get_symbol_changes to return no changes
+                    with patch.object(daemon._ticker_manager, 'get_symbol_changes') as mock_changes:
+                        mock_changes.return_value = {'added': [], 'removed': []}
 
-                    # update_symbols should still be called even with no changes
-                    # This ensures the handler's internal state stays in sync
-                    mock_handler_instance.update_symbols.assert_called_once_with(["BTC/USDT"])
+                        # Refresh symbols
+                        await daemon.refresh_symbols()
 
-            # Stop daemon
-            await daemon.stop()
+                        # update_symbols should still be called even with no changes
+                        # This ensures the handler's internal state stays in sync
+                        mock_handler_instance.update_symbols.assert_called_once_with(["BTC/USDT"])
+
+                # Stop daemon
+                await daemon.stop()
 
     @pytest.mark.asyncio
     async def test_symbol_refresh_background_task(self, mock_database_with_changing_symbols, mock_process_cache, mock_exchange_handler):
@@ -317,23 +352,45 @@ class TestSymbolRefresh:
     async def test_symbol_refresh_multiple_exchanges(self, mock_process_cache):
         """Test symbol refresh with multiple exchanges."""
         with patch('fullon_ticker_service.daemon.DatabaseContext') as mock_db_context:
-            # Mock multiple exchanges with different symbols
-            mock_exchange_1 = MagicMock()
-            mock_exchange_1.cat_ex_id = 1
-            mock_exchange_1.name = "binance"  # Set as string directly
+            # Mock multiple user exchanges
+            mock_user_exchange_1 = {
+                'ex_id': 1,
+                'cat_ex_id': 1,
+                'ex_named': 'binance',
+                'user_id': 'admin_user',
+                'exchange_name': 'binance'
+            }
 
-            mock_exchange_2 = MagicMock()
-            mock_exchange_2.cat_ex_id = 2
-            mock_exchange_2.name = "kraken"  # Set as string directly
+            mock_user_exchange_2 = {
+                'ex_id': 2,
+                'cat_ex_id': 2,
+                'ex_named': 'kraken',
+                'user_id': 'admin_user',
+                'exchange_name': 'kraken'
+            }
+
+            # Mock category exchanges
+            mock_cat_exchange_1 = MagicMock()
+            mock_cat_exchange_1.cat_ex_id = 1
+            mock_cat_exchange_1.name = "binance"
+
+            mock_cat_exchange_2 = MagicMock()
+            mock_cat_exchange_2.cat_ex_id = 2
+            mock_cat_exchange_2.name = "kraken"
 
             mock_db = AsyncMock()
+            mock_db.users.get_user_id.return_value = 'admin_user'
+            mock_db.exchanges.get_user_exchanges.return_value = [
+                mock_user_exchange_1,
+                mock_user_exchange_2
+            ]
             mock_db.exchanges.get_cat_exchanges.return_value = [
-                mock_exchange_1,
-                mock_exchange_2
+                mock_cat_exchange_1,
+                mock_cat_exchange_2
             ]
 
             # Different symbols for each exchange
-            mock_db.symbols.get_by_exchange_id.side_effect = [
+            mock_db.symbols.get_all.side_effect = [
                 # Initial load
                 [MagicMock(symbol="BTC/USDT"), MagicMock(symbol="ETH/USDT")],  # binance
                 [MagicMock(symbol="BTC/USD"), MagicMock(symbol="ETH/USD")],    # kraken
@@ -342,48 +399,53 @@ class TestSymbolRefresh:
             mock_db_context.return_value.__aenter__.return_value = mock_db
             mock_db_context.return_value.__aexit__.return_value = None
 
-            with patch('fullon_ticker_service.daemon.ExchangeHandler') as mock_handler_class:
-                mock_handlers = {}
+            # Also mock cache manager to avoid cache operations
+            with patch('fullon_orm.cache.cache_manager') as mock_cache_mgr:
+                mock_cache_mgr.region.invalidate.return_value = None
+                mock_cache_mgr.invalidate_exchange_caches.return_value = None
 
-                def create_handler(exchange_name, symbols):
-                    handler = MagicMock()
-                    handler.start = AsyncMock()
-                    handler.stop = AsyncMock()
-                    handler.update_symbols = AsyncMock()
-                    handler.get_status.return_value = ConnectionStatus.CONNECTED
-                    handler.get_last_ticker_time.return_value = time.time()
-                    handler.get_reconnect_count.return_value = 0
-                    handler.set_ticker_callback = MagicMock()
-                    mock_handlers[exchange_name] = handler
-                    return handler
+                with patch('fullon_ticker_service.daemon.ExchangeHandler') as mock_handler_class:
+                    mock_handlers = {}
 
-                mock_handler_class.side_effect = create_handler
+                    def create_handler(exchange_name, symbols):
+                        handler = MagicMock()
+                        handler.start = AsyncMock()
+                        handler.stop = AsyncMock()
+                        handler.update_symbols = AsyncMock()
+                        handler.get_status.return_value = ConnectionStatus.CONNECTED
+                        handler.get_last_ticker_time.return_value = time.time()
+                        handler.get_reconnect_count.return_value = 0
+                        handler.set_ticker_callback = MagicMock()
+                        mock_handlers[exchange_name] = handler
+                        return handler
 
-                daemon = TickerDaemon()
+                    mock_handler_class.side_effect = create_handler
 
-                # Start daemon
-                await daemon.start()
+                    daemon = TickerDaemon()
 
-                # Verify both exchanges initialized
-                assert "binance" in mock_handlers
-                assert "kraken" in mock_handlers
+                    # Start daemon
+                    await daemon.start()
 
-                # Mock the ticker manager's refresh_symbols
-                with patch.object(daemon._ticker_manager, 'refresh_symbols', new_callable=AsyncMock) as mock_refresh:
-                    mock_refresh.return_value = {
-                        "binance": ["BTC/USDT", "XRP/USDT"],
-                        "kraken": ["BTC/USD", "ADA/USD"]
-                    }
+                    # Verify both exchanges initialized
+                    assert "binance" in mock_handlers
+                    assert "kraken" in mock_handlers
 
-                    # Mock get_symbol_changes for each exchange
-                    with patch.object(daemon._ticker_manager, 'get_symbol_changes') as mock_changes:
-                        mock_changes.side_effect = [
-                            {'added': ['XRP/USDT'], 'removed': ['ETH/USDT']},  # binance
-                            {'added': ['ADA/USD'], 'removed': ['ETH/USD']},    # kraken
-                        ]
+                    # Mock the ticker manager's refresh_symbols
+                    with patch.object(daemon._ticker_manager, 'refresh_symbols', new_callable=AsyncMock) as mock_refresh:
+                        mock_refresh.return_value = {
+                            "binance": ["BTC/USDT", "XRP/USDT"],
+                            "kraken": ["BTC/USD", "ADA/USD"]
+                        }
 
-                        # Refresh symbols
-                        await daemon.refresh_symbols()
+                        # Mock get_symbol_changes for each exchange
+                        with patch.object(daemon._ticker_manager, 'get_symbol_changes') as mock_changes:
+                            mock_changes.side_effect = [
+                                {'added': ['XRP/USDT'], 'removed': ['ETH/USDT']},  # binance
+                                {'added': ['ADA/USD'], 'removed': ['ETH/USD']},    # kraken
+                            ]
+
+                            # Refresh symbols
+                            await daemon.refresh_symbols()
 
                         # Verify both exchanges updated with new symbols
                         mock_handlers["binance"].update_symbols.assert_called_with(
@@ -400,62 +462,90 @@ class TestSymbolRefresh:
     async def test_symbol_refresh_continues_after_handler_error(self, mock_process_cache):
         """Test that symbol refresh continues for other exchanges if one fails."""
         with patch('fullon_ticker_service.daemon.DatabaseContext') as mock_db_context:
-            mock_exchange_1 = MagicMock()
-            mock_exchange_1.cat_ex_id = 1
-            mock_exchange_1.name = "binance"  # Set as string directly
+            # Mock user exchanges
+            mock_user_exchange_1 = {
+                'ex_id': 1,
+                'cat_ex_id': 1,
+                'ex_named': 'binance',
+                'user_id': 'admin_user',
+                'exchange_name': 'binance'
+            }
 
-            mock_exchange_2 = MagicMock()
-            mock_exchange_2.cat_ex_id = 2
-            mock_exchange_2.name = "kraken"  # Set as string directly
+            mock_user_exchange_2 = {
+                'ex_id': 2,
+                'cat_ex_id': 2,
+                'ex_named': 'kraken',
+                'user_id': 'admin_user',
+                'exchange_name': 'kraken'
+            }
+
+            # Mock category exchanges
+            mock_cat_exchange_1 = MagicMock()
+            mock_cat_exchange_1.cat_ex_id = 1
+            mock_cat_exchange_1.name = "binance"
+
+            mock_cat_exchange_2 = MagicMock()
+            mock_cat_exchange_2.cat_ex_id = 2
+            mock_cat_exchange_2.name = "kraken"
 
             mock_db = AsyncMock()
-            mock_db.exchanges.get_cat_exchanges.return_value = [
-                mock_exchange_1,
-                mock_exchange_2
+            mock_db.users.get_user_id.return_value = 'admin_user'
+            mock_db.exchanges.get_user_exchanges.return_value = [
+                mock_user_exchange_1,
+                mock_user_exchange_2
             ]
-            mock_db.symbols.get_by_exchange_id.return_value = [
+            mock_db.exchanges.get_cat_exchanges.return_value = [
+                mock_cat_exchange_1,
+                mock_cat_exchange_2
+            ]
+            mock_db.symbols.get_all.return_value = [
                 MagicMock(symbol="BTC/USDT")
             ]
 
             mock_db_context.return_value.__aenter__.return_value = mock_db
             mock_db_context.return_value.__aexit__.return_value = None
 
-            with patch('fullon_ticker_service.daemon.ExchangeHandler') as mock_handler_class:
-                # Create handlers with one that fails update
-                binance_handler = MagicMock()
-                binance_handler.start = AsyncMock()
-                binance_handler.stop = AsyncMock()
-                binance_handler.update_symbols = AsyncMock(side_effect=Exception("Update failed"))
-                binance_handler.get_status.return_value = ConnectionStatus.CONNECTED
-                binance_handler.set_ticker_callback = MagicMock()
+            # Also mock cache manager to avoid cache operations
+            with patch('fullon_orm.cache.cache_manager') as mock_cache_mgr:
+                mock_cache_mgr.region.invalidate.return_value = None
+                mock_cache_mgr.invalidate_exchange_caches.return_value = None
 
-                kraken_handler = MagicMock()
-                kraken_handler.start = AsyncMock()
-                kraken_handler.stop = AsyncMock()
-                kraken_handler.update_symbols = AsyncMock()
-                kraken_handler.get_status.return_value = ConnectionStatus.CONNECTED
-                kraken_handler.set_ticker_callback = MagicMock()
+                with patch('fullon_ticker_service.daemon.ExchangeHandler') as mock_handler_class:
+                    # Create handlers with one that fails update
+                    binance_handler = MagicMock()
+                    binance_handler.start = AsyncMock()
+                    binance_handler.stop = AsyncMock()
+                    binance_handler.update_symbols = AsyncMock(side_effect=Exception("Update failed"))
+                    binance_handler.get_status.return_value = ConnectionStatus.CONNECTED
+                    binance_handler.set_ticker_callback = MagicMock()
 
-                mock_handler_class.side_effect = [binance_handler, kraken_handler]
+                    kraken_handler = MagicMock()
+                    kraken_handler.start = AsyncMock()
+                    kraken_handler.stop = AsyncMock()
+                    kraken_handler.update_symbols = AsyncMock()
+                    kraken_handler.get_status.return_value = ConnectionStatus.CONNECTED
+                    kraken_handler.set_ticker_callback = MagicMock()
 
-                daemon = TickerDaemon()
+                    mock_handler_class.side_effect = [binance_handler, kraken_handler]
 
-                # Start daemon
-                await daemon.start()
+                    daemon = TickerDaemon()
 
-                # Mock the ticker manager's refresh_symbols
-                with patch.object(daemon._ticker_manager, 'refresh_symbols', new_callable=AsyncMock) as mock_refresh:
-                    mock_refresh.return_value = {
-                        "binance": ["BTC/USDT"],
-                        "kraken": ["BTC/USDT"]
-                    }
+                    # Start daemon
+                    await daemon.start()
 
-                    # Mock get_symbol_changes
-                    with patch.object(daemon._ticker_manager, 'get_symbol_changes') as mock_changes:
-                        mock_changes.return_value = {'added': [], 'removed': []}
+                    # Mock the ticker manager's refresh_symbols
+                    with patch.object(daemon._ticker_manager, 'refresh_symbols', new_callable=AsyncMock) as mock_refresh:
+                        mock_refresh.return_value = {
+                            "binance": ["BTC/USDT"],
+                            "kraken": ["BTC/USDT"]
+                        }
 
-                        # Refresh symbols (binance will fail, kraken should succeed)
-                        await daemon.refresh_symbols()
+                        # Mock get_symbol_changes
+                        with patch.object(daemon._ticker_manager, 'get_symbol_changes') as mock_changes:
+                            mock_changes.return_value = {'added': [], 'removed': []}
+
+                            # Refresh symbols (binance will fail, kraken should succeed)
+                            await daemon.refresh_symbols()
 
                         # Verify kraken was still updated despite binance failure
                         kraken_handler.update_symbols.assert_called_once()
