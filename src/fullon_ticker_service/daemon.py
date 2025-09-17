@@ -338,28 +338,100 @@ class TickerDaemon:
     async def _initialize_exchange_handlers(self) -> None:
         """Initialize exchange handlers from database configuration."""
         try:
-            async with DatabaseContext() as db:
-                # Get active exchanges
-                exchanges = await db.exchanges.get_cat_exchanges(all=False)
-                logger.info(f"Found {len(exchanges)} active exchanges")
+            logger.info("🔧 Starting exchange handlers initialization")
+            logger.info(f"🔗 DATABASE_URL env var: {os.getenv('DATABASE_URL', 'NOT_SET')}")
 
-                for exchange in exchanges:
+            # Clear cache to ensure fresh data when using test databases
+            # The Redis cache is shared across database connections, so we need to clear it
+            # when switching to a different database (especially test databases)
+            from fullon_orm.cache import cache_manager
+            cache_manager.region.invalidate()  # Clear entire cache
+            cache_manager.invalidate_exchange_caches()  # Clear exchange-specific caches
+            logger.info("🔄 Cache cleared to ensure fresh data from current database")
+
+            async with DatabaseContext() as db:
+                logger.info("🔗 Database connection established successfully")
+                # Get admin user ID from ADMIN_MAIL environment variable
+                admin_email = os.getenv("ADMIN_MAIL", "admin@fullon")
+                logger.info(f"Looking for admin user with email: {admin_email}")
+                admin_uid = await db.users.get_user_id(admin_email)
+                if not admin_uid:
+                    logger.error(
+                        f"Admin user not found for email: {admin_email}. "
+                        f"Check ADMIN_MAIL environment variable and ensure admin user exists."
+                    )
+                    return
+
+                logger.info(f"Found admin user ID: {admin_uid}")
+
+                # Get user exchanges for admin user (exchanges admin has credentials for)
+                exchanges = await db.exchanges.get_user_exchanges(admin_uid)
+                logger.info(f"🔍 EXCHANGE RETRIEVAL DEBUG:")
+                logger.info(f"    👤 Admin email: {admin_email}")
+                logger.info(f"    🆔 Admin UID: {admin_uid}")
+                logger.info(f"    📊 Found {len(exchanges)} user exchanges")
+
+                # Also print to stdout so it shows in verbose examples
+                print(f"🔍 DAEMON DEBUG: Found {len(exchanges)} user exchanges for {admin_email} (UID: {admin_uid})")
+
+                if exchanges:
+                    logger.info(f"📋 User exchange details:")
+                    for i, exchange in enumerate(exchanges, 1):
+                        logger.info(f"    {i}. {exchange}")
+                        print(f"    {i}. {exchange}")
+                else:
+                    logger.warning("❌ No user exchanges found for admin user!")
+                    print("❌ No user exchanges found for admin user!")
+
+                for i, exchange in enumerate(exchanges, 1):
                     try:
-                        # Get symbols for this exchange
-                        symbols = await db.symbols.get_by_exchange_id(
-                            exchange_id=exchange.cat_ex_id
-                        )
+                        # Exchange is a dictionary from get_user_exchanges()
+                        ex_id = exchange.get('ex_id')  # Use ex_id, not cat_ex_id
+                        cat_ex_id = exchange.get('cat_ex_id')
+                        ex_named = exchange.get('ex_named', 'unknown')
+
+                        logger.info(f"🔄 Processing exchange {i}/{len(exchanges)}: {ex_named} (cat_ex_id: {cat_ex_id})")
+                        print(f"🔄 Processing exchange {i}/{len(exchanges)}: {ex_named} (cat_ex_id: {cat_ex_id})")
+
+                        if not ex_id:
+                            logger.warning(f"No ex_id found for user exchange {ex_named}")
+                            continue
+
+                        # Get exchange name from cat_ex_id first
+                        cat_exchanges = await db.exchanges.get_cat_exchanges(all=True)
+                        exchange_name = None
+                        for cat_ex in cat_exchanges:
+                            if cat_ex.cat_ex_id == cat_ex_id:
+                                exchange_name = cat_ex.name
+                                break
+                        if not exchange_name:
+                            logger.warning(f"Category exchange not found for cat_ex_id {cat_ex_id}")
+                            continue
+
+                        # Get all symbols for this exchange using exchange_name (avoids bot filtering in get_by_exchange_id)
+                        symbols = await db.symbols.get_all(exchange_name=exchange_name)
+                        print(f"🔍 Symbol retrieval for {ex_named} ({exchange_name}): found {len(symbols)} symbols")
 
                         if not symbols:
-                            logger.warning(f"No symbols found for {exchange.name}")
+                            logger.warning(f"No symbols found for {ex_named} (ex_id: {ex_id})")
+                            print(f"❌ No symbols found for {ex_named} (ex_id: {ex_id})")
                             continue
 
                         # Extract symbol strings
                         symbol_list = [s.symbol for s in symbols]
+                        print(f"📊 Symbol list for {ex_named}: {symbol_list}")
 
-                        # Create exchange handler
+                        # DEBUG: Show exactly what we're creating handlers for
+                        logger.info(f"🔧 Creating ExchangeHandler for:")
+                        logger.info(f"    📍 Exchange: {exchange_name} (user: {ex_named}, cat_ex_id: {cat_ex_id})")
+                        logger.info(f"    🎯 Symbols: {symbol_list} ({len(symbol_list)} total)")
+                        logger.info(f"    📊 Symbol details:")
+                        for i, symbol in enumerate(symbols, 1):
+                            logger.info(f"        {i}. {symbol.symbol} (ID: {symbol.symbol_id})")
+
+                        # Create exchange handler with the category exchange name
                         handler = ExchangeHandler(
-                            exchange_name=exchange.name,
+                            exchange_name=exchange_name,
                             symbols=symbol_list
                         )
 
@@ -373,26 +445,38 @@ class TickerDaemon:
                                 return ticker_callback
 
                             handler.set_ticker_callback(
-                                await make_callback(exchange.name)
+                                await make_callback(exchange_name)
                             )
 
                         # Start the handler
                         await handler.start()
 
                         # Store handler
-                        self._exchange_handlers[exchange.name] = handler
+                        self._exchange_handlers[exchange_name] = handler
 
                         # Update manager's active symbols
                         if self._ticker_manager:
                             self._ticker_manager.update_active_symbols(
-                                exchange.name, symbol_list
+                                exchange_name, symbol_list
                             )
 
-                        logger.info(f"Initialized handler for {exchange.name}",
+                        logger.info(f"Initialized handler for {ex_named} ({exchange_name})",
                                    symbols=len(symbol_list))
+                        print(f"✅ Successfully initialized {ex_named} ({exchange_name}) with {len(symbol_list)} symbols")
 
                     except Exception as e:
-                        logger.error(f"Failed to initialize handler for {exchange.name}: {e}")
+                        logger.error(
+                            f"❌ Failed to initialize handler for {ex_named} ({exchange_name})",
+                            error=str(e),
+                            exchange_name=exchange_name,
+                            user_exchange=ex_named,
+                            cat_ex_id=cat_ex_id,
+                            symbols_count=len(symbol_list) if 'symbol_list' in locals() else 0
+                        )
+                        logger.error(f"❌ Full error details: {type(e).__name__}: {e}")
+                        print(f"❌ FAILED to initialize {ex_named} ({exchange_name}): {type(e).__name__}: {e}")
+                        import traceback
+                        logger.error(f"❌ Traceback: {traceback.format_exc()}")
                         # Continue with other exchanges
 
         except Exception as e:

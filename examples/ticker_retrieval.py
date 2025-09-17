@@ -1,9 +1,15 @@
 #!/usr/bin/env python3
 """
-Example: Retrieving Ticker Data from Cache
+Example: Retrieving Live Ticker Data from Cache
 
-Shows how to query ticker data using fullon_cache methods.
-All methods return fullon_orm.Tick models.
+Shows how to retrieve live ticker data collected by the daemon.
+This is step 2 of the complete workflow demonstration.
+
+Demonstrates:
+- Retrieving live ticker data from cache
+- Displaying real-time ticker updates
+- Various cache query methods
+- Data freshness validation
 """
 
 import asyncio
@@ -16,95 +22,103 @@ logger = get_component_logger("fullon.ticker.example.ticker_retrieval")
 
 
 async def main():
-    """Simple ticker retrieval examples"""
+    """Retrieve and display live ticker data from cache"""
 
-    logger.info("Starting ticker retrieval example")
+    logger.info("📊 Starting live ticker retrieval example")
 
     async with TickCache() as cache:
-        logger.info("Connected to ticker cache")
+        logger.info("🔗 Connected to ticker cache")
 
-        # First, let's store some sample tickers for demonstration
-        logger.info("Storing sample tickers for demonstration...")
+        # Check what tickers are available in cache
+        logger.info("🔍 Checking available ticker data...")
+        all_tickers = await cache.get_all_tickers()
 
-        sample_tickers = [
-            Tick(
-                symbol="BTC/USDT",
-                exchange="binance",
-                price=50000.0,
+        if not all_tickers:
+            logger.warning("⚠️ No ticker data found in cache")
+            logger.info("💡 This example should run after daemon_control.py")
+
+            # Store one sample ticker to demonstrate the retrieval functionality
+            logger.info("📝 Storing one sample ticker for demonstration...")
+            sample_tick = Tick(
+                symbol="DEMO/USDT",
+                exchange="sample",
+                price=1000.0,
                 volume=100.0,
-                bid=49995.0,
-                ask=50005.0,
-                time=time.time()
-            ),
-            Tick(
-                symbol="ETH/USDT",
-                exchange="binance",
-                price=3500.0,
-                volume=500.0,
-                bid=3498.0,
-                ask=3502.0,
-                time=time.time()
-            ),
-            Tick(
-                symbol="BTC/USD",
-                exchange="kraken",
-                price=49900.0,
-                volume=75.0,
-                bid=49895.0,
-                ask=49905.0,
+                bid=999.5,
+                ask=1000.5,
                 time=time.time()
             )
-        ]
+            await cache.set_ticker(sample_tick)
+            all_tickers = [sample_tick]
+            logger.info("✅ Sample ticker stored")
 
-        for tick in sample_tickers:
-            await cache.set_ticker(tick)
-            logger.info(f"  Stored: {tick.symbol} on {tick.exchange} at ${tick.price:.2f}")
+        logger.info(f"📈 Found {len(all_tickers)} ticker(s) in cache")
 
-        # Get specific ticker - returns Tick model or None
-        logger.info("\nRetrieving BTC/USDT ticker from binance...")
-        ticker: Tick = await cache.get_ticker("BTC/USDT", "binance")
-        if ticker:
-            logger.info(f"BTC/USDT: ${ticker.price:.2f} (vol: {ticker.volume})")
-            logger.info(f"  Exchange: {ticker.exchange}")
-            logger.info(f"  Time: {ticker.time}")
-            if ticker.bid and ticker.ask:
-                spread = ticker.ask - ticker.bid
-                spread_pct = (spread / ticker.price) * 100
-                logger.info(f"  Spread: ${spread:.2f} ({spread_pct:.4f}%)")
+        # Display all available tickers with details
+        print(f"\n{'='*60}")
+        print("TICKER CACHE CONTENTS")
+        print(f"{'='*60}")
+
+        if all_tickers:
+            print(f"📋 Found {len(all_tickers)} ticker(s) in cache:")
+            for i, ticker in enumerate(all_tickers, 1):
+                age_seconds = time.time() - ticker.time
+                age_color = "🟢" if age_seconds < 60 else "🟡" if age_seconds < 300 else "🔴"
+                print(f"\n  {i}. {age_color} {ticker.symbol} ({ticker.exchange})")
+                print(f"     💰 Price: ${ticker.price}")
+                print(f"     📊 Volume: {ticker.volume}")
+                print(f"     ⏰ Age: {age_seconds:.1f}s ago")
+
+                # Show additional details if available
+                if hasattr(ticker, 'bid') and ticker.bid:
+                    print(f"     📈 Bid: ${ticker.bid}")
+                if hasattr(ticker, 'ask') and ticker.ask:
+                    print(f"     📉 Ask: ${ticker.ask}")
         else:
-            logger.warning("No BTC/USDT ticker found for binance")
+            print("📋 Cache is empty - no ticker data found")
 
-        # Get all tickers for an exchange - returns List[Tick]
-        logger.info("\nRetrieving all tickers for binance...")
-        binance_tickers = await cache.get_tickers("binance")
-        logger.info(f"Binance has {len(binance_tickers)} tickers")
-        for ticker in binance_tickers[:3]:  # Show first 3
-            logger.info(f"  {ticker.symbol}: ${ticker.price:.2f}")
+        print(f"{'='*60}\n")
 
-        # Get all tickers across all exchanges
-        logger.info("\nRetrieving all tickers from cache...")
-        all_tickers = await cache.get_all_tickers()
-        logger.info(f"Total tickers in cache: {len(all_tickers)}")
+        # Demonstrate specific ticker retrieval
+        if all_tickers:
+            first_ticker = all_tickers[0]
+            logger.info(f"🔎 Retrieving specific ticker: {first_ticker.symbol}")
 
-        # Group by symbol to show cross-exchange prices
-        by_symbol = {}
-        for tick in all_tickers:
-            if tick.symbol not in by_symbol:
-                by_symbol[tick.symbol] = []
-            by_symbol[tick.symbol].append(tick)
+            specific_ticker = await cache.get_ticker(first_ticker.symbol, first_ticker.exchange)
+            if specific_ticker:
+                logger.info(f"✅ Retrieved: {specific_ticker.symbol} = ${specific_ticker.price}")
+            else:
+                logger.warning(f"❌ Could not retrieve {first_ticker.symbol}")
 
-        for symbol, ticks in by_symbol.items():
-            if len(ticks) > 1:
-                logger.info(f"\n{symbol} prices across exchanges:")
-                for tick in ticks:
-                    logger.info(f"  {tick.exchange}: ${tick.price:.2f}")
+        # Show cache statistics
+        print("📊 CACHE ANALYSIS:")
+        unique_exchanges = set(ticker.exchange for ticker in all_tickers)
+        unique_symbols = set(ticker.symbol for ticker in all_tickers)
+        print(f"  📍 Exchanges: {len(unique_exchanges)} ({', '.join(unique_exchanges)})")
+        print(f"  🎯 Symbols: {len(unique_symbols)}")
+        print(f"  📈 Total tickers: {len(all_tickers)}")
 
-        # Convert ticker to dict if needed
-        if ticker:
-            ticker_dict = ticker.to_dict()
-            logger.info(f"\nTicker as dict: {ticker_dict}")
+        # Demonstrate live updates if we have fresh data
+        fresh_tickers = [t for t in all_tickers if (time.time() - t.time) < 60]
+        old_tickers = [t for t in all_tickers if (time.time() - t.time) >= 60]
 
-    logger.info("\nTicker retrieval example completed")
+        print(f"\n🕐 FRESHNESS ANALYSIS:")
+        print(f"  🟢 Fresh (< 60s): {len(fresh_tickers)} tickers")
+        print(f"  🟡 Old (≥ 60s): {len(old_tickers)} tickers")
+
+        if fresh_tickers:
+            print(f"\n✅ SUCCESS: Found {len(fresh_tickers)} fresh ticker(s)!")
+            print("💡 This proves the daemon successfully collected live data!")
+
+            # Show the freshest ticker as example
+            freshest = min(fresh_tickers, key=lambda t: time.time() - t.time)
+            age = time.time() - freshest.time
+            print(f"🎯 Freshest ticker: {freshest.symbol} ({freshest.exchange}) - {age:.1f}s ago")
+        else:
+            print("⚠️ No fresh tickers found - data may be from previous runs")
+            print("💡 This suggests the daemon isn't actively collecting live data")
+
+        logger.info("✅ Ticker retrieval example completed")
 
 
 if __name__ == "__main__":

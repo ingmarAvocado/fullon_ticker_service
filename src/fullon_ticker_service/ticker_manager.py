@@ -35,62 +35,65 @@ class TickerManager:
         self._recovery_counts: dict[str, int] = {}  # exchange -> recovery count
         self._latency_samples: dict[str, list[float]] = {}  # exchange -> latency samples
 
-    async def process_ticker(self, exchange_name: str, ticker_data: dict[str, Any]) -> None:
+    async def process_ticker(self, exchange_name: str, tick: Tick) -> None:
         """
         Process incoming ticker data from an exchange.
 
         This will:
-        1. Validate ticker data format
-        2. Transform to fullon_orm.Tick model
-        3. Store in fullon_cache
-        4. Update processing metrics
+        1. Validate Tick object
+        2. Store in fullon_cache
+        3. Update processing metrics
 
         Args:
             exchange_name: Name of the exchange
-            ticker_data: Raw ticker data dict from exchange
+            tick: Tick model object from fullon_exchange
         """
         start_time = time.perf_counter()
 
-        # Validate required fields
-        if not ticker_data or 'symbol' not in ticker_data:
-            logger.warning(
-                "Invalid ticker data received",
-                exchange=exchange_name,
-                data=ticker_data
-            )
+        # Add debug logging
+        logger.info(f"🎯 TICKER MANAGER DEBUG: Processing ticker from {exchange_name}")
+        logger.info(f"    📊 Tick object: {tick}")
+        logger.info(f"    🏷️ Symbol: {tick.symbol if tick else 'NONE'}")
+        logger.info(f"    💰 Price: {tick.price if tick else 'NONE'}")
+        print(f"🎯 TICKER MANAGER DEBUG: Processing {exchange_name}:{tick.symbol if tick else 'NONE'} = ${tick.price if tick else 'NONE'}")
+
+        # Validate tick object
+        if not tick:
+            logger.warning(f"❌ Invalid tick received: None", exchange=exchange_name)
+            print(f"❌ TICKER MANAGER: Invalid tick received from {exchange_name}")
             return
 
-        if 'price' not in ticker_data and 'last' not in ticker_data:
-            logger.warning(
-                "Ticker data missing price",
-                exchange=exchange_name,
-                symbol=ticker_data.get('symbol')
-            )
+        if not hasattr(tick, 'symbol') or not tick.symbol:
+            logger.warning(f"❌ Tick missing symbol", exchange=exchange_name, tick=tick)
+            print(f"❌ TICKER MANAGER: Tick missing symbol from {exchange_name}")
+            return
+
+        if not hasattr(tick, 'price') or tick.price is None:
+            logger.warning(f"❌ Tick missing price", exchange=exchange_name, symbol=tick.symbol)
+            print(f"❌ TICKER MANAGER: Tick missing price for {exchange_name}:{tick.symbol}")
             return
 
         try:
-            # Transform to Tick model
-            tick = Tick(
-                symbol=ticker_data.get('symbol'),
-                exchange=exchange_name,
-                price=ticker_data.get('price') or ticker_data.get('last', 0.0),
-                time=ticker_data.get('timestamp') or ticker_data.get('time'),
-                volume=ticker_data.get('volume'),
-                bid=ticker_data.get('bid'),
-                ask=ticker_data.get('ask'),
-                last=ticker_data.get('last'),
-                change=ticker_data.get('change'),
-                percentage=ticker_data.get('percentage')
-            )
+            # Tick object is already provided, just use it directly
+            logger.info(f"✅ TICKER MANAGER: Valid tick received for {exchange_name}:{tick.symbol}")
+            print(f"✅ TICKER MANAGER: Valid tick received for {exchange_name}:{tick.symbol} = ${tick.price}")
 
             # Store in cache
+            logger.info(f"💾 TICKER MANAGER: Storing tick in cache for {exchange_name}:{tick.symbol}")
+            print(f"💾 TICKER MANAGER: Storing tick in cache for {exchange_name}:{tick.symbol}")
             async with TickCache() as cache:
                 await cache.set_ticker(tick)
+            logger.info(f"✅ TICKER MANAGER: Successfully stored in cache")
+            print(f"✅ TICKER MANAGER: Successfully stored in cache")
 
             # Update metrics
             if exchange_name not in self._ticker_count:
                 self._ticker_count[exchange_name] = 0
             self._ticker_count[exchange_name] += 1
+
+            logger.info(f"📊 TICKER MANAGER: Updated count for {exchange_name} = {self._ticker_count[exchange_name]}")
+            print(f"📊 TICKER MANAGER: Updated count for {exchange_name} = {self._ticker_count[exchange_name]}")
+            print(f"📊 TOTAL TICKERS: {sum(self._ticker_count.values())}")
 
             # Track latency
             latency_ms = (time.perf_counter() - start_time) * 1000

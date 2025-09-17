@@ -1,14 +1,15 @@
 #!/usr/bin/env python3
 """
-Example: Daemon Control with Symbol Refresh
+Example: Start Ticker Daemon
 
-Shows how to start/stop/status the ticker daemon with symbol refresh functionality.
+Starts the ticker daemon and keeps it running to collect live ticker data.
+This is step 1 of the complete workflow demonstration.
+
 Demonstrates:
-- Starting and stopping the daemon
-- Process registration in fullon_cache for monitoring
-- Manual symbol refresh trigger
-- Automatic periodic symbol refresh (every 5 minutes by default)
-- Health status reporting
+- Starting the daemon with all configured exchanges
+- Displaying active exchanges and symbols
+- Process registration for monitoring
+- Keeping daemon running for ticker collection
 """
 
 import asyncio
@@ -22,99 +23,127 @@ logger = get_component_logger("fullon.ticker.example.daemon_control")
 
 
 async def main():
-    """Daemon control example with symbol refresh demonstration"""
+    """Start ticker daemon and keep it running for live ticker collection"""
 
-    logger.info("Starting daemon control with symbol refresh example")
-
-    # Display current symbol refresh interval
-    refresh_interval = int(os.environ.get('TICKER_SYMBOL_REFRESH_INTERVAL', '300'))
-    logger.info(f"Symbol refresh interval: {refresh_interval} seconds")
+    logger.info("🚀 Starting ticker daemon example")
 
     # Create daemon instance
     ticker_daemon = TickerDaemon()
     logger.info("Created ticker daemon instance")
 
-    # Start the daemon (this starts the periodic symbol refresh task)
-    logger.info("Starting ticker daemon with automatic symbol refresh...")
+    # Start the daemon
+    logger.info("Starting ticker daemon...")
     await ticker_daemon.start()
-    logger.info("Ticker daemon started successfully")
-    logger.info(f"Symbol refresh task will run every {refresh_interval} seconds")
+    logger.info("✅ Ticker daemon started successfully")
 
     # Register process in cache for monitoring
     async with ProcessCache() as cache:
         process_id = await cache.register_process(
             process_type=ProcessType.TICK,
             component="ticker_daemon",
-            params={
-                "daemon_id": id(ticker_daemon),
-                "symbol_refresh_interval": refresh_interval
-            },
-            message="Started with symbol refresh"
+            params={"daemon_id": id(ticker_daemon)},
+            message="Collecting live ticker data"
         )
-    logger.info("Process registered in cache with symbol refresh info")
+    logger.info("📋 Process registered in cache for monitoring")
 
-    # Check initial status
+    # Display configuration and status
     status = await ticker_daemon.status()
-    logger.info(f"Daemon status: {status}")
+    logger.info(f"📊 Daemon status: {status}")
 
-    # Get initial health information
+    # Show what exchanges and symbols are being monitored
     health = await ticker_daemon.get_health()
-    logger.info(f"Initial health - Exchanges: {list(health.get('exchanges', {}).keys())}")
+    exchanges = health.get('exchanges', {})
 
-    # Let it run for a bit to collect some tickers
-    logger.info("Letting daemon run for 3 seconds to collect initial tickers...")
-    await asyncio.sleep(3)
+    print(f"\n{'='*60}")
+    print("DAEMON STATUS AND CONFIGURATION")
+    print(f"{'='*60}")
 
-    # Manually trigger a symbol refresh (demonstrating manual refresh capability)
-    logger.info("Manually triggering symbol refresh...")
-    await ticker_daemon.refresh_symbols()
-    logger.info("Manual symbol refresh completed")
+    if exchanges:
+        print(f"🔗 Monitoring {len(exchanges)} exchange(s):")
+        for exchange_name, exchange_health in exchanges.items():
+            connected = exchange_health.get('connected', False)
+            status_icon = "🟢" if connected else "🔴"
+            status = exchange_health.get('status', 'unknown')
+            print(f"  {status_icon} {exchange_name}: {status}")
 
-    # Get updated health after refresh
+            if not connected:
+                print(f"    ⚠️ Connection failed - check admin credentials for {exchange_name}")
+
+        # Show ticker stats if available
+        if 'ticker_stats' in health:
+            stats = health['ticker_stats']
+            print(f"📈 Active symbols by exchange:")
+            if 'active_symbols_count' in stats:
+                for exchange, count in stats['active_symbols_count'].items():
+                    print(f"  📍 {exchange}: {count} symbols")
+            else:
+                print("  ℹ️ No symbol count data available")
+        else:
+            print("📊 No ticker stats available yet")
+    else:
+        print("⚠️ No exchanges found - check demo data and credentials")
+        print("💡 This means the admin user has no exchange configurations")
+
+    print(f"{'='*60}\n")
+
+    # Wait a moment for initial connections and ticker collection
+    logger.info("⏳ Waiting 5 seconds for ticker collection to start...")
+    await asyncio.sleep(5)
+
+    # Show updated ticker stats
     health = await ticker_daemon.get_health()
     if 'ticker_stats' in health:
         stats = health['ticker_stats']
-        logger.info(f"Ticker stats after refresh:")
-        logger.info(f"  - Active exchanges: {stats.get('exchanges', [])}")
-        logger.info(f"  - Total tickers processed: {stats.get('total_tickers', 0)}")
-        logger.info(f"  - Last symbol refresh: {stats.get('last_symbol_refresh', 'Never')}")
-        if 'active_symbols_count' in stats:
-            for exchange, count in stats['active_symbols_count'].items():
-                logger.info(f"  - {exchange}: {count} active symbols")
+        total_tickers = stats.get('total_tickers', 0)
+        logger.info(f"📊 Total tickers processed so far: {total_tickers}")
 
-    # Update process status with refresh info
-    async with ProcessCache() as cache:
-        await cache.update_process(
-            process_id=process_id,
-            message="Running with symbol refresh active"
-        )
-    logger.info("Process status updated with refresh info")
+    logger.info("🎯 Daemon is now running and collecting live ticker data")
+    logger.info("📊 Collecting ticker data for demonstration...")
 
-    # Let it run a bit more to demonstrate continuous operation
-    logger.info("Running for 5 more seconds to demonstrate continuous operation...")
-    await asyncio.sleep(5)
+    # Run for 20 seconds to collect some real ticker data
+    print("⏳ Running for 20 seconds to collect ticker data...")
+    print("📊 Ticker Collection Progress:")
 
-    # Check final health before stopping
+    for i in range(4):
+        await asyncio.sleep(5)
+        health = await ticker_daemon.get_health()
+        if 'ticker_stats' in health:
+            stats = health['ticker_stats']
+            total_tickers = stats.get('total_tickers', 0)
+            print(f"  🕐 After {(i+1)*5}s: {total_tickers} tickers collected")
+        else:
+            print(f"  🕐 After {(i+1)*5}s: No ticker stats available")
+
+    # Final stats
+    print(f"\n{'='*60}")
+    print("FINAL TICKER COLLECTION RESULTS")
+    print(f"{'='*60}")
+
     health = await ticker_daemon.get_health()
-    for exchange_name, exchange_health in health.get('exchanges', {}).items():
-        logger.info(f"Exchange {exchange_name}:")
-        logger.info(f"  - Connected: {exchange_health.get('connected', False)}")
-        logger.info(f"  - Status: {exchange_health.get('status', 'unknown')}")
-        logger.info(f"  - Reconnects: {exchange_health.get('reconnects', 0)}")
+    if 'ticker_stats' in health:
+        stats = health['ticker_stats']
+        total_tickers = stats.get('total_tickers', 0)
+        print(f"🎯 Total tickers collected: {total_tickers}")
 
-    # Stop the daemon (this also stops the symbol refresh task)
-    logger.info("Stopping ticker daemon (including symbol refresh task)...")
+        if total_tickers > 0:
+            print("✅ SUCCESS: Ticker service is collecting live data!")
+        else:
+            print("⚠️ No tickers collected - likely credential or connection issues")
+    else:
+        print("❌ No ticker stats available - daemon may not be working properly")
+
+    print(f"{'='*60}\n")
+
+    logger.info("✅ Daemon startup and data collection example completed")
+    logger.info("🔄 Ticker data is now available in cache for retrieval")
+
+    # For this demo, we'll leave the daemon running briefly so ticker_retrieval can access data
+    # In the subprocess model, each example is independent but cache persists
+    logger.info("📋 Leaving ticker data in cache for next example...")
+
+    # Stop daemon gracefully after collecting data
     await ticker_daemon.stop()
-    logger.info("Ticker daemon stopped successfully")
-
-    # Clean up process from cache
-    async with ProcessCache() as cache:
-        await cache.delete_from_top(component="ticker_service:ticker_daemon")
-    logger.info("Process cleaned up from cache")
-
-    logger.info("Daemon control with symbol refresh example completed")
-    logger.info("Note: In production, the symbol refresh task runs automatically every 5 minutes")
-    logger.info("You can set TICKER_SYMBOL_REFRESH_INTERVAL env var to change the interval")
+    logger.info("🛑 Daemon stopped - ticker data preserved in cache")
 
 
 if __name__ == "__main__":

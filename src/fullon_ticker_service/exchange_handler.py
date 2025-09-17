@@ -6,6 +6,7 @@ and auto-reconnection logic with exponential backoff.
 """
 
 import asyncio
+import os
 import time
 from collections.abc import Callable
 from enum import Enum
@@ -89,9 +90,19 @@ class ExchangeHandler:
                 if not cat_exchange:
                     raise ValueError(f"Exchange {self.exchange_name} not found in database")
 
-                # Get or create a user exchange for this category
-                # For ticker service, we just need any user exchange
-                user_exchanges = await db.exchanges.get_user_exchanges(1)  # Using test user
+                # Get admin user ID from ADMIN_MAIL environment variable
+                admin_email = os.getenv("ADMIN_MAIL", "admin@fullon")
+                admin_uid = await db.users.get_user_id(admin_email)
+                if not admin_uid:
+                    logger.error(
+                        f"Admin user not found: {admin_email}. Cannot retrieve exchange credentials.",
+                        exchange_name=self.exchange_name,
+                        admin_email=admin_email
+                    )
+                    raise ValueError(f"Admin user {admin_email} not found in database")
+
+                # Get or create a user exchange for this category using admin user
+                user_exchanges = await db.exchanges.get_user_exchanges(admin_uid)
                 exchange_obj = None
                 for ue_dict in user_exchanges:
                     if ue_dict.get("cat_ex_id") == cat_exchange.cat_ex_id:
@@ -100,7 +111,7 @@ class ExchangeHandler:
                         from fullon_orm.models import Exchange
                         exchange_obj = Exchange(
                             ex_id=ue_dict["ex_id"],
-                            uid=1,  # We know this is user 1
+                            uid=admin_uid,  # Use admin user ID
                             cat_ex_id=ue_dict["cat_ex_id"],
                             name=ue_dict["ex_named"],  # ex_named is the actual user exchange name
                             test=True,
@@ -111,39 +122,43 @@ class ExchangeHandler:
                         break
 
                 if not exchange_obj:
-                    # Create a temporary exchange object for public ticker access
-                    from fullon_orm.models import Exchange
-                    exchange_obj = Exchange(
-                        uid=1,  # Test user
-                        cat_ex_id=cat_exchange.cat_ex_id,
-                        name=f"{self.exchange_name}_ticker",
-                        test=True,
-                        active=True
+                    # No exchange found for admin user - log error and fail
+                    logger.error(
+                        f"No exchange configuration found for admin user {admin_email} on {self.exchange_name}. "
+                        f"Admin must have exchange credentials configured to collect ticker data.",
+                        exchange_name=self.exchange_name,
+                        admin_email=admin_email,
+                        admin_uid=admin_uid
                     )
-                    # Add the relationship manually
-                    exchange_obj.cat_exchange = cat_exchange
+                    raise ValueError(
+                        f"No exchange {self.exchange_name} configured for admin user {admin_email}. "
+                        f"Admin credentials required for ticker data collection."
+                    )
 
             # Get websocket handler for ticker streaming
-            # Use fullon_credentials to get real API credentials with fallback to public access
+            # Use fullon_credentials to get API credentials with fallback to public access
             def credential_provider(exchange):
                 try:
-                    # Use exchange.ex_id to get real credentials from fullon_credentials
+                    # Use exchange.ex_id to get credentials from fullon_credentials
                     secret, key = fullon_credentials(ex_id=exchange.ex_id)
                     logger.info(
                         f"Retrieved credentials for exchange {exchange.ex_id}",
                         exchange_id=exchange.ex_id,
-                        exchange_name=self.exchange_name
+                        exchange_name=self.exchange_name,
+                        admin_email=admin_email
                     )
                     return (key, secret)  # Return in (api_key, secret) format for ExchangeQueue
                 except ValueError as e:
-                    # Fallback to empty credentials for public ticker data access
+                    # No credentials found - fall back to public ticker access
                     logger.info(
-                        f"No credentials found for exchange {exchange.ex_id}, using public access for ticker data",
+                        f"No credentials found for exchange {exchange.ex_id} on {self.exchange_name}. "
+                        f"Using public ticker data access (common for demo/testing).",
                         exchange_id=exchange.ex_id,
                         exchange_name=self.exchange_name,
-                        reason=str(e)
+                        admin_email=admin_email
                     )
-                    return ("", "")  # Public ticker streams work with empty credentials
+                    # Return empty credentials for public access - many exchanges support public ticker streams
+                    return ("", "")
 
             self._handler = await ExchangeQueue.get_websocket_handler(
                 exchange_obj,
@@ -156,8 +171,8 @@ class ExchangeHandler:
             # Subscribe to each symbol with callback
             for symbol in self.symbols:
                 # Create wrapper callback that processes ticker data
-                async def ticker_callback(data: dict[str, Any]) -> None:
-                    await self._process_ticker(data)
+                async def ticker_callback(tick: Tick) -> None:
+                    await self._process_ticker(tick)
 
                 # Subscribe and store subscription ID
                 sub_id = await self._handler.subscribe_ticker(
@@ -247,51 +262,49 @@ class ExchangeHandler:
         """
         self._ticker_callback = callback
 
-    async def _process_ticker(self, ticker_data: dict[str, Any]) -> None:
+    async def _process_ticker(self, tick: Tick) -> None:
         """
         Process incoming ticker data.
 
         This will:
-        1. Transform raw data to Tick model
-        2. Store in cache
-        3. Call custom callback if set
-        4. Update last ticker time
+        1. Store Tick model in cache
+        2. Call custom callback if set
+        3. Update last ticker time
 
         Args:
-            ticker_data: Raw ticker data from exchange
+            tick: Tick model object from fullon_exchange
         """
         try:
+            # Add debug logging
+            logger.info(f"🔄 EXCHANGE HANDLER DEBUG: Received tick from {self.exchange_name}")
+            logger.info(f"    📊 Tick: {tick.symbol} = ${tick.price}")
+            print(f"🔄 EXCHANGE HANDLER DEBUG: Received tick {self.exchange_name}:{tick.symbol} = ${tick.price}")
+
             # Update last ticker time
-            self._last_ticker_time = ticker_data.get("time", time.time())
+            self._last_ticker_time = tick.time if tick.time else time.time()
 
             # Execute custom callback if set
             if self._ticker_callback:
+                logger.info(f"📞 EXCHANGE HANDLER: Calling custom callback for {self.exchange_name}:{tick.symbol}")
+                print(f"📞 EXCHANGE HANDLER: Calling custom callback for {self.exchange_name}:{tick.symbol}")
                 try:
-                    await self._ticker_callback(ticker_data)
+                    await self._ticker_callback(tick)
+                    logger.info(f"✅ EXCHANGE HANDLER: Callback completed successfully")
+                    print(f"✅ EXCHANGE HANDLER: Callback completed successfully")
                 except Exception as e:
                     logger.error(
-                        f"Error in custom ticker callback: {e}",
+                        f"❌ Error in custom ticker callback: {e}",
                         exchange=self.exchange_name,
-                        symbol=ticker_data.get("symbol"),
+                        symbol=tick.symbol,
                         error=str(e)
                     )
+                    print(f"❌ EXCHANGE HANDLER: Callback failed: {e}")
+            else:
+                logger.warning(f"⚠️ EXCHANGE HANDLER: No callback set for {self.exchange_name}")
+                print(f"⚠️ EXCHANGE HANDLER: No callback set for {self.exchange_name}")
 
-            # Transform to Tick model and store in cache
+            # Store in cache (tick is already a Tick model)
             try:
-                tick = Tick(
-                    symbol=ticker_data["symbol"],
-                    exchange=ticker_data.get("exchange", self.exchange_name),
-                    price=float(ticker_data["price"]),
-                    volume=float(ticker_data.get("volume", 0)),
-                    time=ticker_data.get("time", time.time()),
-                    bid=float(ticker_data["bid"]) if ticker_data.get("bid") else None,
-                    ask=float(ticker_data["ask"]) if ticker_data.get("ask") else None,
-                    last=float(ticker_data.get("last", ticker_data["price"])),
-                    change=float(ticker_data["change"]) if ticker_data.get("change") else None,
-                    percentage=float(ticker_data["percentage"]) if ticker_data.get("percentage") else None
-                )
-
-                # Store in cache
                 async with TickCache() as cache:
                     await cache.set_ticker(tick)
 
@@ -302,11 +315,11 @@ class ExchangeHandler:
                     price=tick.price
                 )
 
-            except (KeyError, ValueError, TypeError) as e:
+            except Exception as e:
                 logger.error(
-                    f"Invalid ticker data format: {e}",
+                    f"Failed to store ticker in cache: {e}",
                     exchange=self.exchange_name,
-                    ticker_data=ticker_data,
+                    symbol=tick.symbol,
                     error=str(e)
                 )
 
@@ -443,8 +456,8 @@ class ExchangeHandler:
         for symbol in to_add:
             try:
                 # Create wrapper callback
-                async def ticker_callback(data: dict[str, Any]) -> None:
-                    await self._process_ticker(data)
+                async def ticker_callback(tick: Tick) -> None:
+                    await self._process_ticker(tick)
 
                 # Subscribe and store subscription ID
                 sub_id = await self._handler.subscribe_ticker(

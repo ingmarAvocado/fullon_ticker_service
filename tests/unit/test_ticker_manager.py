@@ -558,3 +558,46 @@ class TestTickerManagerCacheIntegration:
             # Latencies should be reasonable
             assert metrics['binance']['avg_latency_ms'] < 50
             assert metrics['binance']['p99_latency_ms'] < 100
+
+    async def test_missing_price_validation(self):
+        """Test ticker data validation for missing price field."""
+        manager = TickerManager()
+
+        # Test ticker data without price or last field
+        ticker_data = {
+            'symbol': 'BTC/USDT',
+            'volume': 1000.0,
+            'timestamp': time.time()
+        }
+
+        with patch('fullon_ticker_service.ticker_manager.TickCache') as mock_cache_class:
+            mock_cache = AsyncMock()
+            mock_cache_class.return_value.__aenter__.return_value = mock_cache
+
+            # Should return early without storing
+            await manager.process_ticker('binance', ticker_data)
+
+            # Cache should not be called since data is invalid
+            mock_cache.set_ticker.assert_not_called()
+
+    async def test_latency_sample_size_limit(self):
+        """Test that latency samples are limited to 1000 entries."""
+        manager = TickerManager()
+
+        ticker_data = {
+            'symbol': 'BTC/USDT',
+            'price': 50000.0,
+            'volume': 1000.0,
+            'timestamp': time.time()
+        }
+
+        with patch('fullon_ticker_service.ticker_manager.TickCache') as mock_cache_class:
+            mock_cache = AsyncMock()
+            mock_cache_class.return_value.__aenter__.return_value = mock_cache
+
+            # Process 1100 tickers to exceed the 1000 sample limit
+            for _ in range(1100):
+                await manager.process_ticker('binance', ticker_data)
+
+            # Check that samples are limited to 1000
+            assert len(manager._latency_samples['binance']) == 1000

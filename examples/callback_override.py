@@ -22,27 +22,15 @@ from fullon_orm.models.tick import Tick
 logger = get_component_logger("fullon.ticker.callback")
 
 
-async def custom_ticker_callback(ticker_data: dict):
+async def custom_ticker_callback(tick: Tick):
     """
     Custom callback function for processing incoming ticker data.
     This gets called every time a ticker update is received.
-    
+
     Args:
-        ticker_data: Raw ticker data dict from exchange
+        tick: Tick model object from fullon_exchange
     """
-    # Convert to fullon_orm.Tick model
-    tick = Tick(
-        symbol=ticker_data["symbol"],
-        exchange=ticker_data["exchange"], 
-        price=float(ticker_data["price"]),
-        volume=float(ticker_data.get("volume", 0)),
-        time=ticker_data.get("time", time.time()),
-        bid=float(ticker_data["bid"]) if ticker_data.get("bid") else None,
-        ask=float(ticker_data["ask"]) if ticker_data.get("ask") else None,
-        last=float(ticker_data.get("last", ticker_data["price"])),
-        change=float(ticker_data["change"]) if ticker_data.get("change") else None,
-        percentage=float(ticker_data["percentage"]) if ticker_data.get("percentage") else None
-    )
+    # tick is already a fullon_orm.Tick model - no conversion needed!
     
     # Save Tick model to cache
     async with TickCache() as cache:

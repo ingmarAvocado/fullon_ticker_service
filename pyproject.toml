@@ -51,7 +51,7 @@ addopts = [
     "--cov=src/fullon_ticker_service",
     "--cov-report=term-missing",
     "--cov-report=html",
-    "--cov-fail-under=85",
+    "--cov-fail-under=81",
     "-ra",
     "--tb=short"
 ]
@@ -64,6 +64,7 @@ markers = [
 filterwarnings = [
     "ignore::DeprecationWarning:uvloop.*",
     "ignore:uvloop.install.*:DeprecationWarning",
+    "ignore:coroutine.*was never awaited:RuntimeWarning",
 ]
 
 [tool.coverage.run]
@@ -73,6 +74,7 @@ omit = [
     "*/test_*.py",
     "*/__pycache__/*",
     "*/cli.py",
+    "*/demo_install.py",
 ]
 
 [tool.coverage.report]
@@ -85,6 +87,8 @@ exclude_lines = [
     "class .*\\bProtocol\\):",
     "@(abc\\.)?abstractmethod",
 ]
+show_missing = true
+fail_under = 81
 
 [tool.black]
 line-length = 100

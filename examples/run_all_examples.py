@@ -58,14 +58,17 @@ async def run_example(example_path: Path, verbose: bool = False) -> bool:
         if proc.returncode == 0:
             print_success(f"✓ {example_path.name} passed")
             if verbose and stdout:
-                print(f"Output:\n{stdout.decode()}")
+                print_info("Example output:")
+                print(stdout.decode())
             return True
         else:
             print_error(f"✗ {example_path.name} failed (exit code: {proc.returncode})")
             if stderr:
-                print(f"Error output:\n{stderr.decode()}")
+                print_error("Error output:")
+                print(stderr.decode())
             if verbose and stdout:
-                print(f"Stdout:\n{stdout.decode()}")
+                print_info("Stdout:")
+                print(stdout.decode())
             return False
             
     except Exception as e:
@@ -82,9 +85,9 @@ async def run_all_examples(verbose: bool = False, specific_example: str = None) 
     
     # Define all available examples in order
     all_examples = [
-        "daemon_control.py",
-        "ticker_retrieval.py", 
-        "callback_override.py"
+        "daemon_control.py",     # Step 1: Start daemon and collect data
+        "ticker_retrieval.py",   # Step 2: Retrieve live ticker data
+        "daemon_stop.py"         # Step 3: Clean shutdown and final stats
     ]
     
     # Filter to specific example if requested
@@ -140,7 +143,12 @@ async def main():
     # Handle --list option
     if args.list:
         print_header("AVAILABLE EXAMPLES")
-        examples = ["daemon_control.py", "ticker_retrieval.py", "callback_override.py"]
+        examples = [
+            "daemon_control.py     # Start daemon and collect ticker data",
+            "ticker_retrieval.py   # Retrieve live ticker data from cache",
+            "daemon_stop.py        # Clean shutdown and final statistics",
+            "callback_override.py  # Custom ticker callback (standalone)"
+        ]
         for example in examples:
             print_info(f"  {example}")
         print_info(f"\nUsage: python {sys.argv[0]} --example daemon_control.py")
