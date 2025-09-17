@@ -1,215 +1,226 @@
 #!/usr/bin/env python3
 """
-Run All Examples Script for fullon_ticker_service
+Simple Ticker Daemon Control
 
-This is the main validation script that:
-1. Creates isolated test database with demo data
-2. Runs all examples (or specific example) against real data
-3. Cleans up test database
-4. Reports success/failure
-
-This script is the PRIMARY completion criteria for GitHub issues.
-When this script passes, the feature is complete and ready for production.
+A clean, straightforward example showing how to start/stop the ticker daemon.
+Can be run independently or via run_example_pipeline.py.
 
 Usage:
-    ./run_example_pipeline.py                           # Run all examples with auto cleanup
-    ./run_example_pipeline.py --example daemon_control.py  # Run specific example only
-    ./run_example_pipeline.py --list                    # List available examples
-    ./run_example_pipeline.py --keep-db                 # Keep test database after run
-    ./run_example_pipeline.py --verbose                 # Show detailed output
-    ./run_example_pipeline.py -e ticker_retrieval.py -v # Run specific example with verbose output
+    python daemon_control.py start
+    python daemon_control.py stop
 """
 
 import asyncio
-import argparse
-import sys
 import os
+import signal
+import sys
+import time
 from pathlib import Path
 
-# Script is now in examples directory, can import demo_data directly
-examples_dir = Path(__file__).parent
-
+from fullon_ticker_service.daemon import TickerDaemon
+from fullon_orm import DatabaseContext
+from fullon_cache import TickCache, ProcessCache
 from demo_data import (
-    database_context_for_test, generate_test_db_name, install_demo_data,
-    print_header, print_success, print_error, print_info, print_warning,
-    Colors
+    generate_test_db_name,
+    create_test_database,
+    drop_test_database,
+    install_demo_data
 )
 
+# Global daemon instance
+daemon = None
 
-async def run_example(example_path: Path, verbose: bool = False) -> bool:
-    """Run a single example script and return success status"""
-    if not example_path.exists():
-        print_warning(f"Example not found: {example_path.name}")
-        return False
-    
-    print_info(f"Running: {example_path.name}")
-    
+
+def load_env():
+    """Load environment variables from .env if DB_NAME not set"""
+    if not os.getenv('DB_NAME'):
+        try:
+            from dotenv import load_dotenv
+            env_path = Path(__file__).parent.parent / '.env'
+            load_dotenv(env_path)
+            print(f"📄 Loaded environment from {env_path}")
+        except ImportError:
+            print("⚠️  python-dotenv not available, using existing environment")
+        except Exception as e:
+            print(f"⚠️  Could not load .env file: {e}")
+
+
+async def show_system_status():
+    """Display daemon health and process status"""
+    global daemon
+
+    print("\n" + "="*60)
+    print("🔍 SYSTEM STATUS REPORT")
+    print("="*60)
+
+    # Show daemon health
+    if daemon:
+        health = await daemon.get_health()
+        status = health.get('status', 'unknown')
+        running = health.get('running', False)
+
+        print(f"🚀 Daemon Status: {status} {'🟢' if running else '🔴'}")
+
+        # Show exchange statuses
+        exchanges = health.get('exchanges', {})
+        if exchanges:
+            print(f"📡 Exchange Connections ({len(exchanges)}):")
+            for ex_name, ex_health in exchanges.items():
+                connected = ex_health.get('connected', False)
+                status_icon = "🟢" if connected else "🔴"
+                reconnects = ex_health.get('reconnects', 0)
+                print(f"  {status_icon} {ex_name} (reconnects: {reconnects})")
+
+        # Show ticker statistics
+        ticker_stats = health.get('ticker_stats', {})
+        if ticker_stats:
+            total_tickers = ticker_stats.get('total_tickers', 0)
+            active_symbols = ticker_stats.get('active_symbols_count', {})
+            print(f"📊 Ticker Stats: {total_tickers} total processed")
+            for ex, count in active_symbols.items():
+                print(f"  📈 {ex}: {count} symbols")
+
+    # Show registered processes
     try:
-        proc = await asyncio.create_subprocess_exec(
-            sys.executable, str(example_path),
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-            cwd=str(example_path.parent),
-            env=os.environ.copy()  # Pass current environment to subprocess
-        )
-        
-        stdout, stderr = await proc.communicate()
-        
-        if proc.returncode == 0:
-            print_success(f"✓ {example_path.name} passed")
-            if verbose and stdout:
-                print_info("Example output:")
-                print(stdout.decode())
-            return True
-        else:
-            print_error(f"✗ {example_path.name} failed (exit code: {proc.returncode})")
-            if stderr:
-                print_error("Error output:")
-                print(stderr.decode())
-            if verbose and stdout:
-                print_info("Stdout:")
-                print(stdout.decode())
-            return False
-            
+        async with ProcessCache() as cache:
+            processes = await cache.get_active_processes()
+            if processes:
+                print(f"⚙️  Registered Processes ({len(processes)}):")
+                for process_info in processes[:3]:  # Show first 3
+                    component = process_info.get('component', 'unknown')
+                    message = process_info.get('message', 'running')
+                    print(f"  🔄 {component}: {message}")
+            else:
+                print("⚙️  No registered processes found")
     except Exception as e:
-        print_error(f"✗ {example_path.name} failed with exception: {e}")
-        return False
+        print(f"⚠️  Could not fetch process status: {e}")
+
+    print("="*60 + "\n")
 
 
-async def run_example_pipeline(verbose: bool = False, specific_example: str = None) -> tuple[int, int]:
-    """Run all examples (or specific example) and return (passed, total) counts"""
-    if specific_example:
-        print_header(f"RUNNING SPECIFIC EXAMPLE: {specific_example}")
-    else:
-        print_header("RUNNING ALL EXAMPLES")
-    
-    # Define all available examples in order
-    all_examples = [
-        "daemon_control.py",     # Step 1: Start daemon and collect data
-        "ticker_retrieval.py",   # Step 2: Retrieve live ticker data
-        "daemon_stop.py"         # Step 3: Clean shutdown and final stats
-    ]
-    
-    # Filter to specific example if requested
-    if specific_example:
-        if specific_example not in all_examples:
-            print_error(f"Example '{specific_example}' not found!")
-            print_info(f"Available examples: {', '.join(all_examples)}")
-            return 0, 1
-        examples_to_run = [specific_example]
-    else:
-        examples_to_run = all_examples
-    
-    results = []
-    examples_dir_path = Path(__file__).parent
-    
-    for example_name in examples_to_run:
-        example_path = examples_dir_path / example_name
-        success = await run_example(example_path, verbose)
-        results.append((example_name, success))
-    
-    # Summary
-    passed = sum(1 for _, success in results if success)
-    total = len(results)
-    
-    print_info(f"\nResults Summary:")
-    for example_name, success in results:
-        status = f"{Colors.GREEN}✓{Colors.END}" if success else f"{Colors.RED}✗{Colors.END}"
-        print(f"  {status} {example_name}")
-    
-    return passed, total
+async def start(use_test_db=False):
+    """Start the ticker daemon and begin collecting data"""
+    global daemon
+    test_db_name = None
 
-
-async def main():
-    """Main function that sets up test environment and runs examples"""
-    parser = argparse.ArgumentParser(
-        description="Run all fullon_ticker_service examples against test database",
-        formatter_class=argparse.RawDescriptionHelpFormatter
-    )
-    
-    parser.add_argument('--keep-db', action='store_true',
-                        help='Keep test database after running (for debugging)')
-    parser.add_argument('--verbose', '-v', action='store_true',
-                        help='Show detailed output from examples')
-    parser.add_argument('--db-name', 
-                        help='Use specific test database name instead of generating random one')
-    parser.add_argument('--example', '-e',
-                        help='Run only specific example (e.g., daemon_control.py)')
-    parser.add_argument('--list', '-l', action='store_true',
-                        help='List available examples')
-    
-    args = parser.parse_args()
-    
-    # Handle --list option
-    if args.list:
-        print_header("AVAILABLE EXAMPLES")
-        examples = [
-            "daemon_control.py     # Start daemon and collect ticker data",
-            "ticker_retrieval.py   # Retrieve live ticker data from cache",
-            "daemon_stop.py        # Clean shutdown and final statistics"
-        ]
-        for example in examples:
-            print_info(f"  {example}")
-        print_info(f"\nUsage: python {sys.argv[0]} --example daemon_control.py")
-        return 0
-    
-    # Generate or use provided database name
-    test_db_name = args.db_name or generate_test_db_name()
-    
-    print_header("FULLON TICKER SERVICE - EXAMPLES VALIDATION")
-    print_info(f"Test database: {test_db_name}")
-    if args.example:
-        print_info(f"Running example: {args.example}")
-    else:
-        print_info("Running: ALL examples")
-    print_info(f"Keep database: {'Yes' if args.keep_db else 'No'}")
-    print_info(f"Verbose output: {'Yes' if args.verbose else 'No'}")
-    
     try:
-        if args.keep_db and args.db_name:
-            # Use existing database, don't create/drop
-            print_info("Using existing test database...")
+        if use_test_db:
+            # Create test database and install demo data
+            test_db_name = generate_test_db_name()
+            print(f"🔧 Creating test database: {test_db_name}")
+            await create_test_database(test_db_name)
+
+            # Override DB_NAME environment variable
+            os.environ['DB_NAME'] = test_db_name
+            print(f"📄 Using test database: {test_db_name}")
+
+            # Install demo data
+            print("📊 Installing demo data...")
             await install_demo_data()
-            passed, total = await run_example_pipeline(args.verbose, args.example)
+            print("✅ Demo data installed")
         else:
-            # Use context manager for automatic cleanup
-            async with database_context_for_test(test_db_name):
-                await install_demo_data()
-                passed, total = await run_example_pipeline(args.verbose, args.example)
-                
-                if args.keep_db:
-                    print_warning(f"Test database preserved: {test_db_name}")
-                    print_info(f"To cleanup later: python examples/demo_data.py --cleanup {test_db_name}")
-        
-        # Final results
-        print_header("FINAL RESULTS")
-        
-        if passed == total:
-            print_success(f"🎉 ALL EXAMPLES PASSED! ({passed}/{total})")
-            print_info("✅ fullon_ticker_service examples are working correctly")
-            print_info("✅ Integration with fullon ecosystem validated")
-            print_info("✅ Ready for production use")
-            return 0
-        else:
-            print_error(f"❌ SOME EXAMPLES FAILED ({passed}/{total})")
-            print_warning("⚠️ Issues need to be fixed before production")
-            failed = total - passed
-            print_info(f"📋 {failed} example(s) need attention")
-            return 1
-            
-    except Exception as e:
-        print_error(f"❌ EXAMPLES RUN FAILED: {e}")
-        print_warning("⚠️ Check environment setup and dependencies")
-        return 1
+            # Load environment if needed (normal mode)
+            load_env()
+
+        print("🚀 Starting ticker daemon...")
+
+        # Create and start daemon
+        daemon = TickerDaemon()
+        await daemon.start()
+
+        print("✅ Ticker daemon started")
+
+        # Show what we're monitoring
+        async with DatabaseContext() as db:
+            admin_email = os.getenv("ADMIN_MAIL", "admin@fullon")
+            admin_uid = await db.users.get_user_id(admin_email)
+
+            if not admin_uid:
+                print(f"❌ Admin user not found: {admin_email}")
+                return
+
+            exchanges = await db.exchanges.get_user_exchanges(admin_uid)
+            print(f"📊 Monitoring {len(exchanges)} exchange(s) for admin user")
+
+            for exchange in exchanges:
+                ex_name = exchange.get('ex_named', 'unknown')
+                print(f"  • {ex_name}")
+
+        print("🔄 Starting ticker monitoring loop (Ctrl+C to stop)...")
+
+        # Set up shutdown event for clean exit
+        shutdown_event = asyncio.Event()
+
+        def signal_handler(signum, frame):
+            print(f"\n🛑 Received signal {signum}, stopping...")
+            shutdown_event.set()
+
+        # Register signal handlers
+        signal.signal(signal.SIGINT, signal_handler)
+        signal.signal(signal.SIGTERM, signal_handler)
+
+        # Simple ticker display loop with status
+        loop_count = 0
+        while not shutdown_event.is_set():
+            loop_count += 1
+
+            async with TickCache() as cache:
+                tickers = await cache.get_all_tickers()
+
+                if tickers:
+                    # Show latest tickers
+                    fresh_tickers = [t for t in tickers if (time.time() - t.time) < 60]
+                    print(f"📈 Active tickers: {len(fresh_tickers)}/{len(tickers)}")
+
+                    # Show a few examples
+                    for ticker in fresh_tickers[:3]:
+                        age = time.time() - ticker.time
+                        print(f"  💰 {ticker.symbol} ({ticker.exchange}): ${ticker.price:.6f} ({age:.1f}s ago)")
+                else:
+                    print("⏳ Waiting for ticker data...")
+
+            # Every 10 seconds, show daemon and process status
+            if loop_count % 10 == 0:
+                await show_system_status()
+
+            # Wait with timeout so we can check shutdown_event
+            try:
+                await asyncio.wait_for(shutdown_event.wait(), timeout=1.0)
+                break  # shutdown_event was set
+            except asyncio.TimeoutError:
+                continue  # Normal timeout, continue loop
+
+    finally:
+        # Cleanup daemon
+        if daemon:
+            await daemon.stop()
+            print("✅ Daemon stopped")
+
+        # Clean up test database if we created one
+        if test_db_name:
+            print(f"🗑️ Cleaning up test database: {test_db_name}")
+            await drop_test_database(test_db_name)
+            print("✅ Test database cleaned up")
+
+
+async def stop():
+    """Stop the ticker daemon"""
+    global daemon
+
+    if daemon and daemon.is_running():
+        print("🛑 Stopping ticker daemon...")
+        await daemon.stop()
+        print("✅ Daemon stopped")
+    else:
+        print("⚠️  Daemon is not running")
+
+
+def main():
+    """Main entry point with CLI argument handling"""
+    use_test_db = len(sys.argv) > 1 and sys.argv[1] == "test_db"
+    asyncio.run(start(use_test_db=use_test_db))
+
 
 
 if __name__ == "__main__":
-    try:
-        exit_code = asyncio.run(main())
-        sys.exit(exit_code)
-    except KeyboardInterrupt:
-        print_warning("\n⚠️ Examples run interrupted by user")
-        sys.exit(1)
-    except Exception as e:
-        print_error(f"\n❌ Unexpected error: {e}")
-        sys.exit(1)
+    main()
