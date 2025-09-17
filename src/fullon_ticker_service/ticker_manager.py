@@ -11,6 +11,7 @@ from datetime import datetime
 from typing import Any
 
 from fullon_cache import ProcessCache, TickCache
+from fullon_cache.process_cache import ProcessType
 from fullon_log import get_component_logger
 from fullon_orm import DatabaseContext  # type: ignore[import-untyped]
 from fullon_orm.models import Tick  # type: ignore[import-untyped]
@@ -55,36 +56,29 @@ class TickerManager:
         logger.info(f"    📊 Tick object: {tick}")
         logger.info(f"    🏷️ Symbol: {tick.symbol if tick else 'NONE'}")
         logger.info(f"    💰 Price: {tick.price if tick else 'NONE'}")
-        print(f"🎯 TICKER MANAGER DEBUG: Processing {exchange_name}:{tick.symbol if tick else 'NONE'} = ${tick.price if tick else 'NONE'}")
 
         # Validate tick object
         if not tick:
             logger.warning(f"❌ Invalid tick received: None", exchange=exchange_name)
-            print(f"❌ TICKER MANAGER: Invalid tick received from {exchange_name}")
             return
 
         if not hasattr(tick, 'symbol') or not tick.symbol:
             logger.warning(f"❌ Tick missing symbol", exchange=exchange_name, tick=tick)
-            print(f"❌ TICKER MANAGER: Tick missing symbol from {exchange_name}")
             return
 
         if not hasattr(tick, 'price') or tick.price is None:
             logger.warning(f"❌ Tick missing price", exchange=exchange_name, symbol=tick.symbol)
-            print(f"❌ TICKER MANAGER: Tick missing price for {exchange_name}:{tick.symbol}")
             return
 
         try:
             # Tick object is already provided, just use it directly
             logger.info(f"✅ TICKER MANAGER: Valid tick received for {exchange_name}:{tick.symbol}")
-            print(f"✅ TICKER MANAGER: Valid tick received for {exchange_name}:{tick.symbol} = ${tick.price}")
 
             # Store in cache
             logger.info(f"💾 TICKER MANAGER: Storing tick in cache for {exchange_name}:{tick.symbol}")
-            print(f"💾 TICKER MANAGER: Storing tick in cache for {exchange_name}:{tick.symbol}")
             async with TickCache() as cache:
                 await cache.set_ticker(tick)
             logger.info(f"✅ TICKER MANAGER: Successfully stored in cache")
-            print(f"✅ TICKER MANAGER: Successfully stored in cache")
 
             # Update metrics
             if exchange_name not in self._ticker_count:
@@ -92,8 +86,6 @@ class TickerManager:
             self._ticker_count[exchange_name] += 1
 
             logger.info(f"📊 TICKER MANAGER: Updated count for {exchange_name} = {self._ticker_count[exchange_name]}")
-            print(f"📊 TICKER MANAGER: Updated count for {exchange_name} = {self._ticker_count[exchange_name]}")
-            print(f"📊 TOTAL TICKERS: {sum(self._ticker_count.values())}")
 
             # Track latency
             latency_ms = (time.perf_counter() - start_time) * 1000
@@ -117,7 +109,7 @@ class TickerManager:
                 "Failed to process ticker",
                 exchange=exchange_name,
                 error=str(e),
-                ticker_data=ticker_data
+                symbol=tick.symbol if tick else 'unknown'
             )
             # Re-raise for retry logic
             raise
@@ -238,15 +230,15 @@ class TickerManager:
         3. Store in fullon_cache for monitoring
         """
         try:
-            health_data = {
-                'process_name': 'fullon_ticker_service',
-                'status': 'running',
-                'last_update': datetime.now(),
-                'stats': self.get_ticker_stats()
-            }
+            stats = self.get_ticker_stats()
 
             async with ProcessCache() as cache:
-                await cache.register_process('ticker_daemon', health_data)
+                await cache.register_process(
+                    process_type=ProcessType.TICK,
+                    component="ticker_manager",
+                    params={"stats": stats},
+                    message=f"Processing {stats.get('total_tickers', 0)} tickers"
+                )
 
             logger.debug("Process health registered")
 

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Integration tests for run_all_examples.py script.
+Integration tests for run_example_pipeline.py script.
 
 Tests the complete examples validation workflow including:
 - Database setup and teardown
@@ -28,9 +28,9 @@ from demo_data import (
     create_test_database,
     drop_test_database
 )
-from run_all_examples import (
+from run_example_pipeline import (
     run_example,
-    run_all_examples,
+    run_example_pipeline,
     main
 )
 
@@ -108,19 +108,19 @@ raise RuntimeError("Test exception")
 class TestRunAllExamples:
     """Test full examples suite execution."""
 
-    async def test_run_all_examples_success(self, monkeypatch):
+    async def test_run_example_pipeline_success(self, monkeypatch):
         """Test running all examples when they all pass."""
         # Mock run_example to always succeed
         async def mock_run_example(path, verbose):
             return True
 
-        monkeypatch.setattr("run_all_examples.run_example", mock_run_example)
+        monkeypatch.setattr("run_example_pipeline.run_example", mock_run_example)
 
-        passed, total = await run_all_examples(verbose=False)
+        passed, total = await run_example_pipeline(verbose=False)
         assert passed == 3  # daemon_control, ticker_retrieval, callback_override
         assert total == 3
 
-    async def test_run_all_examples_partial_failure(self, monkeypatch):
+    async def test_run_example_pipeline_partial_failure(self, monkeypatch):
         """Test running all examples with some failures."""
         # Mock run_example to fail for specific examples
         call_count = 0
@@ -130,9 +130,9 @@ class TestRunAllExamples:
             # Fail the second example
             return call_count != 2
 
-        monkeypatch.setattr("run_all_examples.run_example", mock_run_example)
+        monkeypatch.setattr("run_example_pipeline.run_example", mock_run_example)
 
-        passed, total = await run_all_examples(verbose=False)
+        passed, total = await run_example_pipeline(verbose=False)
         assert passed == 2
         assert total == 3
 
@@ -144,28 +144,28 @@ class TestRunAllExamples:
             run_paths.append(path.name)
             return True
 
-        monkeypatch.setattr("run_all_examples.run_example", mock_run_example)
+        monkeypatch.setattr("run_example_pipeline.run_example", mock_run_example)
 
-        passed, total = await run_all_examples(verbose=False, specific_example="daemon_control.py")
+        passed, total = await run_example_pipeline(verbose=False, specific_example="daemon_control.py")
         assert passed == 1
         assert total == 1
         assert run_paths == ["daemon_control.py"]
 
     async def test_run_nonexistent_specific_example(self):
         """Test running a non-existent specific example."""
-        passed, total = await run_all_examples(verbose=False, specific_example="nonexistent.py")
+        passed, total = await run_example_pipeline(verbose=False, specific_example="nonexistent.py")
         assert passed == 0
         assert total == 1
 
-    async def test_run_all_examples_with_verbose(self, monkeypatch, capsys):
+    async def test_run_example_pipeline_with_verbose(self, monkeypatch, capsys):
         """Test verbose output for all examples."""
         async def mock_run_example(path, verbose):
             assert verbose is True
             return True
 
-        monkeypatch.setattr("run_all_examples.run_example", mock_run_example)
+        monkeypatch.setattr("run_example_pipeline.run_example", mock_run_example)
 
-        passed, total = await run_all_examples(verbose=True)
+        passed, total = await run_example_pipeline(verbose=True)
         assert passed == 3
         assert total == 3
 
@@ -177,7 +177,7 @@ class TestMainFunction:
     async def test_main_list_examples(self, monkeypatch, capsys):
         """Test --list option."""
         # Mock command line args
-        test_args = ["run_all_examples.py", "--list"]
+        test_args = ["run_example_pipeline.py", "--list"]
         monkeypatch.setattr(sys, "argv", test_args)
 
         # Run main
@@ -191,13 +191,13 @@ class TestMainFunction:
         assert "ticker_retrieval.py" in captured.out
         assert "callback_override.py" in captured.out
 
-    @patch("run_all_examples.database_context_for_test")
-    @patch("run_all_examples.install_demo_data")
-    @patch("run_all_examples.run_all_examples")
+    @patch("run_example_pipeline.database_context_for_test")
+    @patch("run_example_pipeline.install_demo_data")
+    @patch("run_example_pipeline.run_example_pipeline")
     async def test_main_run_all_success(self, mock_run_all, mock_install, mock_db_context, monkeypatch):
         """Test successful run of all examples."""
         # Mock command line args
-        test_args = ["run_all_examples.py"]
+        test_args = ["run_example_pipeline.py"]
         monkeypatch.setattr(sys, "argv", test_args)
 
         # Setup mocks
@@ -214,13 +214,13 @@ class TestMainFunction:
         mock_install.assert_called_once()
         mock_run_all.assert_called_once_with(False, None)
 
-    @patch("run_all_examples.database_context_for_test")
-    @patch("run_all_examples.install_demo_data")
-    @patch("run_all_examples.run_all_examples")
+    @patch("run_example_pipeline.database_context_for_test")
+    @patch("run_example_pipeline.install_demo_data")
+    @patch("run_example_pipeline.run_example_pipeline")
     async def test_main_run_all_failure(self, mock_run_all, mock_install, mock_db_context, monkeypatch):
         """Test run with some failures."""
         # Mock command line args
-        test_args = ["run_all_examples.py"]
+        test_args = ["run_example_pipeline.py"]
         monkeypatch.setattr(sys, "argv", test_args)
 
         # Setup mocks
@@ -233,13 +233,13 @@ class TestMainFunction:
         exit_code = await main()
         assert exit_code == 1
 
-    @patch("run_all_examples.database_context_for_test")
-    @patch("run_all_examples.install_demo_data")
-    @patch("run_all_examples.run_all_examples")
+    @patch("run_example_pipeline.database_context_for_test")
+    @patch("run_example_pipeline.install_demo_data")
+    @patch("run_example_pipeline.run_example_pipeline")
     async def test_main_run_specific_example(self, mock_run_all, mock_install, mock_db_context, monkeypatch):
         """Test running a specific example."""
         # Mock command line args
-        test_args = ["run_all_examples.py", "--example", "daemon_control.py"]
+        test_args = ["run_example_pipeline.py", "--example", "daemon_control.py"]
         monkeypatch.setattr(sys, "argv", test_args)
 
         # Setup mocks
@@ -255,13 +255,13 @@ class TestMainFunction:
         # Verify specific example was passed
         mock_run_all.assert_called_once_with(False, "daemon_control.py")
 
-    @patch("run_all_examples.database_context_for_test")
-    @patch("run_all_examples.install_demo_data")
-    @patch("run_all_examples.run_all_examples")
+    @patch("run_example_pipeline.database_context_for_test")
+    @patch("run_example_pipeline.install_demo_data")
+    @patch("run_example_pipeline.run_example_pipeline")
     async def test_main_with_verbose(self, mock_run_all, mock_install, mock_db_context, monkeypatch):
         """Test verbose option."""
         # Mock command line args
-        test_args = ["run_all_examples.py", "--verbose"]
+        test_args = ["run_example_pipeline.py", "--verbose"]
         monkeypatch.setattr(sys, "argv", test_args)
 
         # Setup mocks
@@ -277,15 +277,15 @@ class TestMainFunction:
         # Verify verbose was passed
         mock_run_all.assert_called_once_with(True, None)
 
-    @patch("run_all_examples.install_demo_data")
+    @patch("run_example_pipeline.install_demo_data")
     async def test_main_with_keep_db(self, mock_install, monkeypatch, capsys):
         """Test --keep-db option."""
         # Mock command line args with both keep-db and db-name
-        test_args = ["run_all_examples.py", "--keep-db", "--db-name", "existing_test_db"]
+        test_args = ["run_example_pipeline.py", "--keep-db", "--db-name", "existing_test_db"]
         monkeypatch.setattr(sys, "argv", test_args)
 
-        # Mock run_all_examples
-        with patch("run_all_examples.run_all_examples") as mock_run_all:
+        # Mock run_example_pipeline
+        with patch("run_example_pipeline.run_example_pipeline") as mock_run_all:
             mock_install.return_value = None
             mock_run_all.return_value = (3, 3)
 
@@ -297,12 +297,12 @@ class TestMainFunction:
             captured = capsys.readouterr()
             assert "Using existing test database" in captured.out
 
-    @patch("run_all_examples.database_context_for_test")
-    @patch("run_all_examples.install_demo_data")
+    @patch("run_example_pipeline.database_context_for_test")
+    @patch("run_example_pipeline.install_demo_data")
     async def test_main_exception_handling(self, mock_install, mock_db_context, monkeypatch, capsys):
         """Test exception handling in main."""
         # Mock command line args
-        test_args = ["run_all_examples.py"]
+        test_args = ["run_example_pipeline.py"]
         monkeypatch.setattr(sys, "argv", test_args)
 
         # Setup mocks to raise exception
@@ -374,7 +374,7 @@ class TestDatabaseContext:
 class TestIntegrationFlow:
     """Test complete integration flow."""
 
-    @patch("run_all_examples.asyncio.create_subprocess_exec")
+    @patch("run_example_pipeline.asyncio.create_subprocess_exec")
     async def test_complete_flow_all_pass(self, mock_subprocess, monkeypatch):
         """Test complete flow when all examples pass."""
         # Mock subprocess to simulate successful examples
@@ -384,8 +384,8 @@ class TestIntegrationFlow:
         mock_subprocess.return_value = mock_proc
 
         # Mock database operations - patch where they're imported/used
-        with patch("run_all_examples.database_context_for_test") as mock_db_context, \
-             patch("run_all_examples.install_demo_data") as mock_install:
+        with patch("run_example_pipeline.database_context_for_test") as mock_db_context, \
+             patch("run_example_pipeline.install_demo_data") as mock_install:
 
             # Mock the async context manager
             mock_db_context.return_value.__aenter__ = AsyncMock(return_value="test_db_12345")
@@ -393,7 +393,7 @@ class TestIntegrationFlow:
             mock_install.return_value = None
 
             # Run the flow
-            test_args = ["run_all_examples.py"]
+            test_args = ["run_example_pipeline.py"]
             monkeypatch.setattr(sys, "argv", test_args)
 
             exit_code = await main()
@@ -404,7 +404,7 @@ class TestIntegrationFlow:
             mock_install.assert_called_once()
             assert mock_subprocess.call_count == 3  # 3 examples
 
-    @patch("run_all_examples.asyncio.create_subprocess_exec")
+    @patch("run_example_pipeline.asyncio.create_subprocess_exec")
     async def test_complete_flow_with_failure(self, mock_subprocess, monkeypatch):
         """Test complete flow when some examples fail."""
         # Mock subprocess to simulate mixed results
@@ -435,7 +435,7 @@ class TestIntegrationFlow:
             mock_install.return_value = None
 
             # Run the flow
-            test_args = ["run_all_examples.py"]
+            test_args = ["run_example_pipeline.py"]
             monkeypatch.setattr(sys, "argv", test_args)
 
             exit_code = await main()
@@ -499,9 +499,9 @@ sys.exit(1)
             # Pass daemon_control and daemon_stop, fail ticker_retrieval
             return "ticker_retrieval" not in str(path)
 
-        monkeypatch.setattr("run_all_examples.run_example", mock_run_example)
+        monkeypatch.setattr("run_example_pipeline.run_example", mock_run_example)
 
-        passed, total = await run_all_examples(verbose=False)
+        passed, total = await run_example_pipeline(verbose=False)
 
         # Check summary output
         captured = capsys.readouterr()

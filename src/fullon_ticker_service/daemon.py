@@ -372,16 +372,13 @@ class TickerDaemon:
                 logger.info(f"    📊 Found {len(exchanges)} user exchanges")
 
                 # Also print to stdout so it shows in verbose examples
-                print(f"🔍 DAEMON DEBUG: Found {len(exchanges)} user exchanges for {admin_email} (UID: {admin_uid})")
 
                 if exchanges:
                     logger.info(f"📋 User exchange details:")
                     for i, exchange in enumerate(exchanges, 1):
                         logger.info(f"    {i}. {exchange}")
-                        print(f"    {i}. {exchange}")
                 else:
                     logger.warning("❌ No user exchanges found for admin user!")
-                    print("❌ No user exchanges found for admin user!")
 
                 for i, exchange in enumerate(exchanges, 1):
                     try:
@@ -391,7 +388,6 @@ class TickerDaemon:
                         ex_named = exchange.get('ex_named', 'unknown')
 
                         logger.info(f"🔄 Processing exchange {i}/{len(exchanges)}: {ex_named} (cat_ex_id: {cat_ex_id})")
-                        print(f"🔄 Processing exchange {i}/{len(exchanges)}: {ex_named} (cat_ex_id: {cat_ex_id})")
 
                         if not ex_id:
                             logger.warning(f"No ex_id found for user exchange {ex_named}")
@@ -410,16 +406,13 @@ class TickerDaemon:
 
                         # Get all symbols for this exchange using exchange_name (avoids bot filtering in get_by_exchange_id)
                         symbols = await db.symbols.get_all(exchange_name=exchange_name)
-                        print(f"🔍 Symbol retrieval for {ex_named} ({exchange_name}): found {len(symbols)} symbols")
 
                         if not symbols:
                             logger.warning(f"No symbols found for {ex_named} (ex_id: {ex_id})")
-                            print(f"❌ No symbols found for {ex_named} (ex_id: {ex_id})")
                             continue
 
                         # Extract symbol strings
                         symbol_list = [s.symbol for s in symbols]
-                        print(f"📊 Symbol list for {ex_named}: {symbol_list}")
 
                         # DEBUG: Show exactly what we're creating handlers for
                         logger.info(f"🔧 Creating ExchangeHandler for:")
@@ -462,7 +455,6 @@ class TickerDaemon:
 
                         logger.info(f"Initialized handler for {ex_named} ({exchange_name})",
                                    symbols=len(symbol_list))
-                        print(f"✅ Successfully initialized {ex_named} ({exchange_name}) with {len(symbol_list)} symbols")
 
                     except Exception as e:
                         logger.error(
@@ -474,7 +466,6 @@ class TickerDaemon:
                             symbols_count=len(symbol_list) if 'symbol_list' in locals() else 0
                         )
                         logger.error(f"❌ Full error details: {type(e).__name__}: {e}")
-                        print(f"❌ FAILED to initialize {ex_named} ({exchange_name}): {type(e).__name__}: {e}")
                         import traceback
                         logger.error(f"❌ Traceback: {traceback.format_exc()}")
                         # Continue with other exchanges
@@ -608,3 +599,67 @@ class TickerDaemon:
         # Reset state
         self._running = False
         self._ticker_manager = None
+
+    async def process_ticker(self, symbol) -> None:
+        """
+        Start processing a single symbol for ticker data.
+
+        This is a simplified interface for examples and single-symbol use cases.
+        Creates a minimal ticker processing setup for just one symbol.
+
+        Args:
+            symbol: fullon_orm.Symbol object to process
+        """
+        async with self._lock:
+            if self._running:
+                logger.warning("Daemon already running, stopping first")
+                await self.stop()
+
+            self._status = DaemonStatus.STARTING
+            logger.info(f"Starting single ticker processing for {symbol.symbol} on {symbol.exchange_name}")
+
+            try:
+                # Initialize ticker manager
+                self._ticker_manager = TickerManager()
+
+                # Register process in cache for monitoring
+                await self._register_process()
+
+                # Create single exchange handler for this symbol
+                from .exchange_handler import ExchangeHandler
+
+                handler = ExchangeHandler(
+                    exchange_name=symbol.exchange_name,
+                    symbols=[symbol.symbol]
+                )
+
+                # Set ticker callback to process through manager
+                async def ticker_callback(ticker_data):
+                    await self._ticker_manager.process_ticker(
+                        symbol.exchange_name, ticker_data
+                    )
+
+                handler.set_ticker_callback(ticker_callback)
+
+                # Start the handler
+                await handler.start()
+
+                # Store handler
+                self._exchange_handlers[symbol.exchange_name] = handler
+
+                # Update manager's active symbols
+                self._ticker_manager.update_active_symbols(
+                    symbol.exchange_name, [symbol.symbol]
+                )
+
+                # Set running state
+                self._running = True
+                self._status = DaemonStatus.RUNNING
+
+                logger.info(f"Single ticker processing started for {symbol.symbol} on {symbol.exchange_name}")
+
+            except Exception as e:
+                logger.error(f"Failed to start single ticker processing: {e}")
+                self._status = DaemonStatus.ERROR
+                await self._cleanup()
+                raise

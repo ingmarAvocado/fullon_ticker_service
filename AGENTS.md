@@ -3,7 +3,7 @@
 ## Project Structure & Modules
 - src/fullon_ticker_service: Core package (daemon.py, exchange_handler.py, ticker_manager.py, __init__.py).
 - tests: Pytest suite with unit/, integration/, and factories/ (database-per-worker, async-first). See tests/conftest.py for isolation and env use.
-- examples: Runnable acceptance examples (daemon_control.py, ticker_retrieval.py, callback_override.py, run_all_examples.py).
+- examples: Runnable acceptance examples (daemon_control.py, ticker_retrieval.py, callback_override.py, run_example_pipeline.py).
 - docs: Fullon ecosystem guides (FULLON_ORM_*, FULLON_CACHE_*, FULLON_LOG_*, 11_FULLON_EXCHANGE_*).
 - env.example → .env: Copy and set DB/Redis/logging vars; keep secrets out of git.
 - legacy: Historical code; do not extend (async-only going forward).
@@ -14,7 +14,7 @@
 - Type check: poetry run mypy src/
 - Unit tests: poetry run pytest -m "unit and not slow"
 - Integration tests: poetry run pytest -m integration -s
-- Examples (primary acceptance): python examples/run_all_examples.py [-e daemon_control.py]
+- Examples (primary acceptance): python examples/run_example_pipeline.py [-e daemon_control.py]
 - Sanity check: python validate_imports.py
 
 ## Coding Style & Conventions

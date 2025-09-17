@@ -53,12 +53,12 @@ Each GitHub issue will follow this mandatory structure:
 
 ## Examples Reference
 - **Primary validation**: `examples/[specific_example].py`
-- **Integration test**: `python examples/run_all_examples.py --example [specific_example].py`
-- **Full integration**: `python examples/run_all_examples.py` (all examples)
+- **Integration test**: `python examples/run_example_pipeline.py --example [specific_example].py`
+- **Full integration**: `python examples/run_example_pipeline.py` (all examples)
 
 ## Acceptance Criteria  
-- [ ] Specific example passes: `python examples/run_all_examples.py --example [specific_example].py`
-- [ ] Full integration passes: `python examples/run_all_examples.py` 
+- [ ] Specific example passes: `python examples/run_example_pipeline.py --example [specific_example].py`
+- [ ] Full integration passes: `python examples/run_example_pipeline.py` 
 - [ ] Unit tests pass (`poetry run pytest`)
 - [ ] Code quality checks pass (`poetry run ruff . && poetry run mypy src/`)
 
@@ -103,7 +103,7 @@ Each GitHub issue will follow this mandatory structure:
 - **Strategy**: Show dict → Tick model → cache pipeline
 
 #### Issue #4: Examples Integration Script
-- **File**: `run_all_examples.py` ✅ (already created)
+- **File**: `run_example_pipeline.py` ✅ (already created)
 - **Purpose**: Script that runs all examples with isolated test database
 - **Dependencies**: Issues #1-3
 - **Strategy**: Examples-driven validation with auto demo data setup
@@ -111,7 +111,7 @@ Each GitHub issue will follow this mandatory structure:
   - Isolated test database creation with random suffix
   - Demo data installation (exchanges, symbols, test user)
   - Individual example testing: `--example daemon_control.py`
-  - Full suite validation: `python examples/run_all_examples.py`
+  - Full suite validation: `python examples/run_example_pipeline.py`
   - Auto cleanup with `--keep-db` option for debugging
 
 ### Phase 2: Core Components (Issues #5-8)
@@ -134,9 +134,9 @@ Each GitHub issue will follow this mandatory structure:
 - [ ] Understanding of fullon_orm database query patterns
 
 ## Post-Implementation Validation  
-- [ ] Examples pass: `python examples/run_all_examples.py --example daemon_control.py`
+- [ ] Examples pass: `python examples/run_example_pipeline.py --example daemon_control.py`
 - [ ] Unit tests pass: `poetry run pytest tests/unit/test_daemon.py`
-- [ ] Integration works: `python examples/run_all_examples.py`
+- [ ] Integration works: `python examples/run_example_pipeline.py`
 - [ ] Import validation: `python validate_imports.py`
 
 #### Issue #6: ExchangeHandler Implementation  
@@ -157,7 +157,7 @@ Each GitHub issue will follow this mandatory structure:
 - [ ] Error recovery patterns designed
 
 ## Post-Implementation Validation  
-- [ ] Examples pass: `python examples/run_all_examples.py --example callback_override.py`
+- [ ] Examples pass: `python examples/run_example_pipeline.py --example callback_override.py`
 - [ ] Unit tests pass: `poetry run pytest tests/unit/test_exchange_handler.py`
 - [ ] Reconnection logic tested
 - [ ] Memory leak testing under load
@@ -179,7 +179,7 @@ Each GitHub issue will follow this mandatory structure:
 - [ ] Health monitoring requirements defined
 
 ## Post-Implementation Validation  
-- [ ] Examples pass: `python examples/run_all_examples.py --example ticker_retrieval.py`
+- [ ] Examples pass: `python examples/run_example_pipeline.py --example ticker_retrieval.py`
 - [ ] Unit tests pass: `poetry run pytest tests/unit/test_ticker_manager.py`
 - [ ] Cache integration verified
 - [ ] Performance benchmarks met (<50ms exchange → cache)
@@ -201,7 +201,7 @@ Each GitHub issue will follow this mandatory structure:
 
 ## Post-Implementation Validation  
 - [ ] Symbol refresh demonstrated in examples
-- [ ] Full integration: `python examples/run_all_examples.py` passes
+- [ ] Full integration: `python examples/run_example_pipeline.py` passes
 - [ ] Performance under symbol changes verified
 - [ ] No memory leaks during long-running symbol updates
 
@@ -324,7 +324,7 @@ Each GitHub issue will follow this mandatory structure:
 
 ## Post-Implementation Validation  
 - [ ] Full test suite passes: `poetry run pytest`
-- [ ] All examples pass: `python examples/run_all_examples.py`
+- [ ] All examples pass: `python examples/run_example_pipeline.py`
 - [ ] Test coverage >90% on core components
 - [ ] Performance tests meet CLAUDE.md requirements
 
@@ -360,12 +360,12 @@ git checkout -b feature/issue-N-description
 # - Validate example passes
 
 # 3. Development iteration (fast feedback loop)
-python examples/run_all_examples.py --example [specific_example].py  # Test specific example
-python examples/run_all_examples.py --example [specific_example].py -v  # Verbose for debugging
-python examples/run_all_examples.py --example [specific_example].py --keep-db  # Keep DB for debugging
+python examples/run_example_pipeline.py --example [specific_example].py  # Test specific example
+python examples/run_example_pipeline.py --example [specific_example].py -v  # Verbose for debugging
+python examples/run_example_pipeline.py --example [specific_example].py --keep-db  # Keep DB for debugging
 
 # 4. Final validation (MANDATORY before commit)
-python examples/run_all_examples.py    # All examples must pass
+python examples/run_example_pipeline.py    # All examples must pass
 poetry run pytest       # Unit tests must pass (using database-per-worker)
 poetry run ruff check .  # Linting must pass
 poetry run mypy src/     # Type checking must pass
@@ -392,9 +392,9 @@ git pull origin main
 
 ### Per Issue (Issues #1-15)
 - [ ] Pre-implementation checklist completed
-- [ ] Specific example passes: `python examples/run_all_examples.py --example [specific].py`
+- [ ] Specific example passes: `python examples/run_example_pipeline.py --example [specific].py`
 - [ ] Post-implementation validation completed
-- [ ] Full integration passes: `python examples/run_all_examples.py`  
+- [ ] Full integration passes: `python examples/run_example_pipeline.py`  
 - [ ] Unit tests pass: `poetry run pytest` (database-per-worker isolation)
 - [ ] Code quality passes: `poetry run ruff check . && poetry run mypy src/`
 - [ ] Import validation: `python validate_imports.py`
@@ -416,7 +416,7 @@ git pull origin main
 - [ ] 5-minute symbol refresh polling works
 - [ ] Error recovery and health monitoring operational
 - [ ] Performance requirements met (<50ms latency, 1000+ tickers/sec)
-- [ ] **Final validation**: `python examples/run_all_examples.py` passes completely
+- [ ] **Final validation**: `python examples/run_example_pipeline.py` passes completely
 - [ ] **Import validation**: `python validate_imports.py` passes
 
 ## Key Commands Reference
@@ -427,17 +427,17 @@ git pull origin main
 python validate_imports.py
 
 # List available examples
-python examples/run_all_examples.py --list
+python examples/run_example_pipeline.py --list
 
 # Test specific example during development
-python examples/run_all_examples.py --example daemon_control.py
-python examples/run_all_examples.py --example ticker_retrieval.py -v
+python examples/run_example_pipeline.py --example daemon_control.py
+python examples/run_example_pipeline.py --example ticker_retrieval.py -v
 
 # Keep test database for debugging
-python examples/run_all_examples.py --example callback_override.py --keep-db
+python examples/run_example_pipeline.py --example callback_override.py --keep-db
 
 # Full validation (GitHub issue completion criteria)
-python examples/run_all_examples.py
+python examples/run_example_pipeline.py
 
 # Manual demo data management
 python examples/demo_data.py --setup

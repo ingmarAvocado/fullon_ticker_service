@@ -1,150 +1,226 @@
 #!/usr/bin/env python3
 """
-Example: Start Ticker Daemon
+Simple Ticker Daemon Control
 
-Starts the ticker daemon and keeps it running to collect live ticker data.
-This is step 1 of the complete workflow demonstration.
+A clean, straightforward example showing how to start/stop the ticker daemon.
+Can be run independently or via run_example_pipeline.py.
 
-Demonstrates:
-- Starting the daemon with all configured exchanges
-- Displaying active exchanges and symbols
-- Process registration for monitoring
-- Keeping daemon running for ticker collection
+Usage:
+    python daemon_control.py start
+    python daemon_control.py stop
 """
 
 import asyncio
 import os
-from fullon_ticker_service import TickerDaemon
-from fullon_cache import ProcessCache
-from fullon_cache.process_cache import ProcessType
-from fullon_log import get_component_logger
+import signal
+import sys
+import time
+from pathlib import Path
 
-logger = get_component_logger("fullon.ticker.example.daemon_control")
+from fullon_ticker_service.daemon import TickerDaemon
+from fullon_orm import DatabaseContext
+from fullon_cache import TickCache, ProcessCache
+from demo_data import (
+    generate_test_db_name,
+    create_test_database,
+    drop_test_database,
+    install_demo_data
+)
+
+# Global daemon instance
+daemon = None
 
 
-async def main():
-    """Start ticker daemon and keep it running for live ticker collection"""
+def load_env():
+    """Load environment variables from .env if DB_NAME not set"""
+    if not os.getenv('DB_NAME'):
+        try:
+            from dotenv import load_dotenv
+            env_path = Path(__file__).parent.parent / '.env'
+            load_dotenv(env_path)
+            print(f"📄 Loaded environment from {env_path}")
+        except ImportError:
+            print("⚠️  python-dotenv not available, using existing environment")
+        except Exception as e:
+            print(f"⚠️  Could not load .env file: {e}")
 
-    logger.info("🚀 Starting ticker daemon example")
 
-    # Create daemon instance
-    ticker_daemon = TickerDaemon()
-    logger.info("Created ticker daemon instance")
+async def show_system_status():
+    """Display daemon health and process status"""
+    global daemon
 
-    # Start the daemon
-    logger.info("Starting ticker daemon...")
-    await ticker_daemon.start()
-    logger.info("✅ Ticker daemon started successfully")
+    print("\n" + "="*60)
+    print("🔍 SYSTEM STATUS REPORT")
+    print("="*60)
 
-    # Register process in cache for monitoring
-    async with ProcessCache() as cache:
-        process_id = await cache.register_process(
-            process_type=ProcessType.TICK,
-            component="ticker_daemon",
-            params={"daemon_id": id(ticker_daemon)},
-            message="Collecting live ticker data"
-        )
-    logger.info("📋 Process registered in cache for monitoring")
+    # Show daemon health
+    if daemon:
+        health = await daemon.get_health()
+        status = health.get('status', 'unknown')
+        running = health.get('running', False)
 
-    # Display configuration and status
-    status = await ticker_daemon.status()
-    logger.info(f"📊 Daemon status: {status}")
+        print(f"🚀 Daemon Status: {status} {'🟢' if running else '🔴'}")
 
-    # Show what exchanges and symbols are being monitored
-    health = await ticker_daemon.get_health()
-    exchanges = health.get('exchanges', {})
+        # Show exchange statuses
+        exchanges = health.get('exchanges', {})
+        if exchanges:
+            print(f"📡 Exchange Connections ({len(exchanges)}):")
+            for ex_name, ex_health in exchanges.items():
+                connected = ex_health.get('connected', False)
+                status_icon = "🟢" if connected else "🔴"
+                reconnects = ex_health.get('reconnects', 0)
+                print(f"  {status_icon} {ex_name} (reconnects: {reconnects})")
 
-    print(f"\n{'='*60}")
-    print("DAEMON STATUS AND CONFIGURATION")
-    print(f"{'='*60}")
+        # Show ticker statistics
+        ticker_stats = health.get('ticker_stats', {})
+        if ticker_stats:
+            total_tickers = ticker_stats.get('total_tickers', 0)
+            active_symbols = ticker_stats.get('active_symbols_count', {})
+            print(f"📊 Ticker Stats: {total_tickers} total processed")
+            for ex, count in active_symbols.items():
+                print(f"  📈 {ex}: {count} symbols")
 
-    if exchanges:
-        print(f"🔗 Monitoring {len(exchanges)} exchange(s):")
-        for exchange_name, exchange_health in exchanges.items():
-            connected = exchange_health.get('connected', False)
-            status_icon = "🟢" if connected else "🔴"
-            status = exchange_health.get('status', 'unknown')
-            print(f"  {status_icon} {exchange_name}: {status}")
-
-            if not connected:
-                print(f"    ⚠️ Connection failed - check admin credentials for {exchange_name}")
-
-        # Show ticker stats if available
-        if 'ticker_stats' in health:
-            stats = health['ticker_stats']
-            print(f"📈 Active symbols by exchange:")
-            if 'active_symbols_count' in stats:
-                for exchange, count in stats['active_symbols_count'].items():
-                    print(f"  📍 {exchange}: {count} symbols")
+    # Show registered processes
+    try:
+        async with ProcessCache() as cache:
+            processes = await cache.get_active_processes()
+            if processes:
+                print(f"⚙️  Registered Processes ({len(processes)}):")
+                for process_info in processes[:3]:  # Show first 3
+                    component = process_info.get('component', 'unknown')
+                    message = process_info.get('message', 'running')
+                    print(f"  🔄 {component}: {message}")
             else:
-                print("  ℹ️ No symbol count data available")
+                print("⚙️  No registered processes found")
+    except Exception as e:
+        print(f"⚠️  Could not fetch process status: {e}")
+
+    print("="*60 + "\n")
+
+
+async def start(use_test_db=False):
+    """Start the ticker daemon and begin collecting data"""
+    global daemon
+    test_db_name = None
+
+    try:
+        if use_test_db:
+            # Create test database and install demo data
+            test_db_name = generate_test_db_name()
+            print(f"🔧 Creating test database: {test_db_name}")
+            await create_test_database(test_db_name)
+
+            # Override DB_NAME environment variable
+            os.environ['DB_NAME'] = test_db_name
+            print(f"📄 Using test database: {test_db_name}")
+
+            # Install demo data
+            print("📊 Installing demo data...")
+            await install_demo_data()
+            print("✅ Demo data installed")
         else:
-            print("📊 No ticker stats available yet")
+            # Load environment if needed (normal mode)
+            load_env()
+
+        print("🚀 Starting ticker daemon...")
+
+        # Create and start daemon
+        daemon = TickerDaemon()
+        await daemon.start()
+
+        print("✅ Ticker daemon started")
+
+        # Show what we're monitoring
+        async with DatabaseContext() as db:
+            admin_email = os.getenv("ADMIN_MAIL", "admin@fullon")
+            admin_uid = await db.users.get_user_id(admin_email)
+
+            if not admin_uid:
+                print(f"❌ Admin user not found: {admin_email}")
+                return
+
+            exchanges = await db.exchanges.get_user_exchanges(admin_uid)
+            print(f"📊 Monitoring {len(exchanges)} exchange(s) for admin user")
+
+            for exchange in exchanges:
+                ex_name = exchange.get('ex_named', 'unknown')
+                print(f"  • {ex_name}")
+
+        print("🔄 Starting ticker monitoring loop (Ctrl+C to stop)...")
+
+        # Set up shutdown event for clean exit
+        shutdown_event = asyncio.Event()
+
+        def signal_handler(signum, frame):
+            print(f"\n🛑 Received signal {signum}, stopping...")
+            shutdown_event.set()
+
+        # Register signal handlers
+        signal.signal(signal.SIGINT, signal_handler)
+        signal.signal(signal.SIGTERM, signal_handler)
+
+        # Simple ticker display loop with status
+        loop_count = 0
+        while not shutdown_event.is_set():
+            loop_count += 1
+
+            async with TickCache() as cache:
+                tickers = await cache.get_all_tickers()
+
+                if tickers:
+                    # Show latest tickers
+                    fresh_tickers = [t for t in tickers if (time.time() - t.time) < 60]
+                    print(f"📈 Active tickers: {len(fresh_tickers)}/{len(tickers)}")
+
+                    # Show a few examples
+                    for ticker in fresh_tickers[:3]:
+                        age = time.time() - ticker.time
+                        print(f"  💰 {ticker.symbol} ({ticker.exchange}): ${ticker.price:.6f} ({age:.1f}s ago)")
+                else:
+                    print("⏳ Waiting for ticker data...")
+
+            # Every 10 seconds, show daemon and process status
+            if loop_count % 10 == 0:
+                await show_system_status()
+
+            # Wait with timeout so we can check shutdown_event
+            try:
+                await asyncio.wait_for(shutdown_event.wait(), timeout=1.0)
+                break  # shutdown_event was set
+            except asyncio.TimeoutError:
+                continue  # Normal timeout, continue loop
+
+    finally:
+        # Cleanup daemon
+        if daemon:
+            await daemon.stop()
+            print("✅ Daemon stopped")
+
+        # Clean up test database if we created one
+        if test_db_name:
+            print(f"🗑️ Cleaning up test database: {test_db_name}")
+            await drop_test_database(test_db_name)
+            print("✅ Test database cleaned up")
+
+
+async def stop():
+    """Stop the ticker daemon"""
+    global daemon
+
+    if daemon and daemon.is_running():
+        print("🛑 Stopping ticker daemon...")
+        await daemon.stop()
+        print("✅ Daemon stopped")
     else:
-        print("⚠️ No exchanges found - check demo data and credentials")
-        print("💡 This means the admin user has no exchange configurations")
+        print("⚠️  Daemon is not running")
 
-    print(f"{'='*60}\n")
 
-    # Wait a moment for initial connections and ticker collection
-    logger.info("⏳ Waiting 5 seconds for ticker collection to start...")
-    await asyncio.sleep(5)
+def main():
+    """Main entry point with CLI argument handling"""
+    use_test_db = len(sys.argv) > 1 and sys.argv[1] == "test_db"
+    asyncio.run(start(use_test_db=use_test_db))
 
-    # Show updated ticker stats
-    health = await ticker_daemon.get_health()
-    if 'ticker_stats' in health:
-        stats = health['ticker_stats']
-        total_tickers = stats.get('total_tickers', 0)
-        logger.info(f"📊 Total tickers processed so far: {total_tickers}")
-
-    logger.info("🎯 Daemon is now running and collecting live ticker data")
-    logger.info("📊 Collecting ticker data for demonstration...")
-
-    # Run for 20 seconds to collect some real ticker data
-    print("⏳ Running for 20 seconds to collect ticker data...")
-    print("📊 Ticker Collection Progress:")
-
-    for i in range(4):
-        await asyncio.sleep(5)
-        health = await ticker_daemon.get_health()
-        if 'ticker_stats' in health:
-            stats = health['ticker_stats']
-            total_tickers = stats.get('total_tickers', 0)
-            print(f"  🕐 After {(i+1)*5}s: {total_tickers} tickers collected")
-        else:
-            print(f"  🕐 After {(i+1)*5}s: No ticker stats available")
-
-    # Final stats
-    print(f"\n{'='*60}")
-    print("FINAL TICKER COLLECTION RESULTS")
-    print(f"{'='*60}")
-
-    health = await ticker_daemon.get_health()
-    if 'ticker_stats' in health:
-        stats = health['ticker_stats']
-        total_tickers = stats.get('total_tickers', 0)
-        print(f"🎯 Total tickers collected: {total_tickers}")
-
-        if total_tickers > 0:
-            print("✅ SUCCESS: Ticker service is collecting live data!")
-        else:
-            print("⚠️ No tickers collected - likely credential or connection issues")
-    else:
-        print("❌ No ticker stats available - daemon may not be working properly")
-
-    print(f"{'='*60}\n")
-
-    logger.info("✅ Daemon startup and data collection example completed")
-    logger.info("🔄 Ticker data is now available in cache for retrieval")
-
-    # For this demo, we'll leave the daemon running briefly so ticker_retrieval can access data
-    # In the subprocess model, each example is independent but cache persists
-    logger.info("📋 Leaving ticker data in cache for next example...")
-
-    # Stop daemon gracefully after collecting data
-    await ticker_daemon.stop()
-    logger.info("🛑 Daemon stopped - ticker data preserved in cache")
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    main()

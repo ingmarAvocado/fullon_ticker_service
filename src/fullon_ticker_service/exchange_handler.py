@@ -179,7 +179,12 @@ class ExchangeHandler:
                     symbol,
                     callback=ticker_callback
                 )
-                self._subscription_ids[symbol] = sub_id
+                # Store subscription ID, handling boolean responses
+                if isinstance(sub_id, str):
+                    self._subscription_ids[symbol] = sub_id
+                else:
+                    # For boolean or other responses, use symbol as identifier
+                    self._subscription_ids[symbol] = symbol
 
             self._status = ConnectionStatus.CONNECTED
             logger.info(
@@ -215,21 +220,11 @@ class ExchangeHandler:
             return
 
         try:
-            # Unsubscribe from all symbols
+            # Disconnect from exchange (this should handle unsubscribing automatically)
             if self._handler:
-                for sub_id in self._subscription_ids.values():
-                    try:
-                        await self._handler.unsubscribe(sub_id)
-                    except Exception as e:
-                        logger.warning(
-                            f"Error unsubscribing {sub_id}: {e}",
-                            subscription_id=sub_id,
-                            error=str(e)
-                        )
-
-                # Disconnect from exchange
                 try:
                     await self._handler.disconnect()
+                    logger.info(f"Disconnected from {self.exchange_name}")
                 except Exception as e:
                     logger.warning(
                         f"Error disconnecting from {self.exchange_name}: {e}",
@@ -278,7 +273,6 @@ class ExchangeHandler:
             # Add debug logging
             logger.info(f"🔄 EXCHANGE HANDLER DEBUG: Received tick from {self.exchange_name}")
             logger.info(f"    📊 Tick: {tick.symbol} = ${tick.price}")
-            print(f"🔄 EXCHANGE HANDLER DEBUG: Received tick {self.exchange_name}:{tick.symbol} = ${tick.price}")
 
             # Update last ticker time
             self._last_ticker_time = tick.time if tick.time else time.time()
@@ -286,11 +280,9 @@ class ExchangeHandler:
             # Execute custom callback if set
             if self._ticker_callback:
                 logger.info(f"📞 EXCHANGE HANDLER: Calling custom callback for {self.exchange_name}:{tick.symbol}")
-                print(f"📞 EXCHANGE HANDLER: Calling custom callback for {self.exchange_name}:{tick.symbol}")
                 try:
                     await self._ticker_callback(tick)
                     logger.info(f"✅ EXCHANGE HANDLER: Callback completed successfully")
-                    print(f"✅ EXCHANGE HANDLER: Callback completed successfully")
                 except Exception as e:
                     logger.error(
                         f"❌ Error in custom ticker callback: {e}",
@@ -298,10 +290,8 @@ class ExchangeHandler:
                         symbol=tick.symbol,
                         error=str(e)
                     )
-                    print(f"❌ EXCHANGE HANDLER: Callback failed: {e}")
             else:
                 logger.warning(f"⚠️ EXCHANGE HANDLER: No callback set for {self.exchange_name}")
-                print(f"⚠️ EXCHANGE HANDLER: No callback set for {self.exchange_name}")
 
             # Store in cache (tick is already a Tick model)
             try:
@@ -437,7 +427,11 @@ class ExchangeHandler:
         for symbol in to_remove:
             if symbol in self._subscription_ids:
                 try:
-                    await self._handler.unsubscribe(self._subscription_ids[symbol])
+                    sub_id = self._subscription_ids[symbol]
+                    # Only call unsubscribe if we have a valid subscription ID (not True/False)
+                    if isinstance(sub_id, str) and sub_id != symbol:
+                        await self._handler.unsubscribe(sub_id)
+                    # For boolean or symbol-as-ID cases, let disconnect handle cleanup
                     del self._subscription_ids[symbol]
                     logger.info(
                         f"Unsubscribed from {symbol} on {self.exchange_name}",
@@ -464,7 +458,12 @@ class ExchangeHandler:
                     symbol,
                     callback=ticker_callback
                 )
-                self._subscription_ids[symbol] = sub_id
+                # Store subscription ID, handling boolean responses
+                if isinstance(sub_id, str):
+                    self._subscription_ids[symbol] = sub_id
+                else:
+                    # For boolean or other responses, use symbol as identifier
+                    self._subscription_ids[symbol] = symbol
                 logger.info(
                     f"Subscribed to {symbol} on {self.exchange_name}",
                     symbol=symbol,

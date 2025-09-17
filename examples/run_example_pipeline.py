@@ -12,12 +12,12 @@ This script is the PRIMARY completion criteria for GitHub issues.
 When this script passes, the feature is complete and ready for production.
 
 Usage:
-    ./run_all_examples.py                           # Run all examples with auto cleanup
-    ./run_all_examples.py --example daemon_control.py  # Run specific example only
-    ./run_all_examples.py --list                    # List available examples
-    ./run_all_examples.py --keep-db                 # Keep test database after run
-    ./run_all_examples.py --verbose                 # Show detailed output
-    ./run_all_examples.py -e ticker_retrieval.py -v # Run specific example with verbose output
+    ./run_example_pipeline.py                           # Run all examples with auto cleanup
+    ./run_example_pipeline.py --example daemon_control.py  # Run specific example only
+    ./run_example_pipeline.py --list                    # List available examples
+    ./run_example_pipeline.py --keep-db                 # Keep test database after run
+    ./run_example_pipeline.py --verbose                 # Show detailed output
+    ./run_example_pipeline.py -e ticker_retrieval.py -v # Run specific example with verbose output
 """
 
 import asyncio
@@ -76,7 +76,7 @@ async def run_example(example_path: Path, verbose: bool = False) -> bool:
         return False
 
 
-async def run_all_examples(verbose: bool = False, specific_example: str = None) -> tuple[int, int]:
+async def run_example_pipeline(verbose: bool = False, specific_example: str = None) -> tuple[int, int]:
     """Run all examples (or specific example) and return (passed, total) counts"""
     if specific_example:
         print_header(f"RUNNING SPECIFIC EXAMPLE: {specific_example}")
@@ -146,8 +146,7 @@ async def main():
         examples = [
             "daemon_control.py     # Start daemon and collect ticker data",
             "ticker_retrieval.py   # Retrieve live ticker data from cache",
-            "daemon_stop.py        # Clean shutdown and final statistics",
-            "callback_override.py  # Custom ticker callback (standalone)"
+            "daemon_stop.py        # Clean shutdown and final statistics"
         ]
         for example in examples:
             print_info(f"  {example}")
@@ -171,12 +170,12 @@ async def main():
             # Use existing database, don't create/drop
             print_info("Using existing test database...")
             await install_demo_data()
-            passed, total = await run_all_examples(args.verbose, args.example)
+            passed, total = await run_example_pipeline(args.verbose, args.example)
         else:
             # Use context manager for automatic cleanup
             async with database_context_for_test(test_db_name):
                 await install_demo_data()
-                passed, total = await run_all_examples(args.verbose, args.example)
+                passed, total = await run_example_pipeline(args.verbose, args.example)
                 
                 if args.keep_db:
                     print_warning(f"Test database preserved: {test_db_name}")
