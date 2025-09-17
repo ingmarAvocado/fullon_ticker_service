@@ -1,390 +1,130 @@
 """
-ExchangeHandler: Per-exchange websocket manager.
+ExchangeHandler: Simple websocket connection manager for ticker data.
 
-Handles async websocket connections to individual exchanges, ticker data processing,
-and auto-reconnection logic with exponential backoff.
+Manages connection to single exchange using fullon_exchange for heavy lifting.
+Follows LRRS principles - minimal wrapper around fullon_exchange functionality.
 """
 
 import asyncio
-import os
-import time
-from collections.abc import Callable
 from enum import Enum
-from typing import Any
+from typing import Callable
 
-from fullon_cache import TickCache
-from fullon_credentials import fullon_credentials
 from fullon_exchange.queue import ExchangeQueue
+from fullon_credentials import fullon_credentials
 from fullon_log import get_component_logger
-from fullon_orm import DatabaseContext
 from fullon_orm.models import Tick
 
 logger = get_component_logger("fullon.ticker.exchange_handler")
 
 
 class ConnectionStatus(Enum):
-    """WebSocket connection status."""
+    """Basic connection status."""
     DISCONNECTED = "disconnected"
     CONNECTING = "connecting"
     CONNECTED = "connected"
-    RECONNECTING = "reconnecting"
     ERROR = "error"
 
 
 class ExchangeHandler:
     """
-    Manages websocket connection and ticker data for a single exchange.
+    Simple exchange websocket handler.
 
-    Follows async-first architecture with automatic reconnection and error recovery.
+    Provides basic functionality needed by daemon:
+    - start() - connect and subscribe to tickers
+    - stop() - disconnect and cleanup
+    - set_ticker_callback() - set processing callback
+    - get_status() - connection status for health
     """
 
     def __init__(self, exchange_name: str, symbols: list[str]):
-        """
-        Initialize exchange handler.
-
-        Args:
-            exchange_name: Name of the exchange (e.g., 'binance', 'kraken')
-            symbols: List of trading symbols to subscribe to (e.g., ['BTC/USDT', 'ETH/USDT'])
-        """
+        """Initialize exchange handler."""
         self.exchange_name = exchange_name
         self.symbols = symbols
         self._status = ConnectionStatus.DISCONNECTED
-        self._reconnect_count = 0
-        self._last_ticker_time: float | None = None
+        self._handler = None
         self._ticker_callback: Callable | None = None
-        self._handler = None  # ExchangeQueue handler
-        self._subscription_ids: dict[str, str] = {}  # symbol -> subscription_id
-        self._factory_initialized = False
+        self._reconnect_count = 0
 
     async def start(self) -> None:
-        """
-        Start the websocket connection and ticker subscription.
-
-        This will:
-        1. Initialize ExchangeQueue factory
-        2. Get unified handler
-        3. Connect to exchange
-        4. Subscribe to ticker streams with callbacks
-        """
-        if self._status in [ConnectionStatus.CONNECTED, ConnectionStatus.CONNECTING]:
+        """Start websocket connection and subscribe to symbols."""
+        if self._status == ConnectionStatus.CONNECTED:
             return
 
         self._status = ConnectionStatus.CONNECTING
+        logger.info(f"Starting connection to {self.exchange_name}")
 
         try:
-            # Initialize factory if not already done
-            if not self._factory_initialized:
-                await ExchangeQueue.initialize_factory()
-                self._factory_initialized = True
+            # Initialize ExchangeQueue (fullon_exchange handles complexity)
+            await ExchangeQueue.initialize_factory()
 
-            # Get the exchange object from database
-            async with DatabaseContext() as db:
-                # First get the category exchange
-                cat_exchanges = await db.exchanges.get_cat_exchanges(all=True)
-                cat_exchange = None
-                for ce in cat_exchanges:
-                    if ce.name.lower() == self.exchange_name.lower():
-                        cat_exchange = ce
-                        break
+            # Create exchange object for fullon_exchange
+            class SimpleExchange:
+                def __init__(self, exchange_name: str, account_id: str):
+                    self.ex_id = f"{exchange_name}_{account_id}"
+                    self.uid = account_id
+                    self.test = False
+                    self.cat_exchange = type('CatExchange', (), {'name': exchange_name})()
 
-                if not cat_exchange:
-                    raise ValueError(f"Exchange {self.exchange_name} not found in database")
+            exchange_obj = SimpleExchange(self.exchange_name, "ticker_account")
 
-                # Get admin user ID from ADMIN_MAIL environment variable
-                admin_email = os.getenv("ADMIN_MAIL", "admin@fullon")
-                admin_uid = await db.users.get_user_id(admin_email)
-                if not admin_uid:
-                    logger.error(
-                        f"Admin user not found: {admin_email}. Cannot retrieve exchange credentials.",
-                        exchange_name=self.exchange_name,
-                        admin_email=admin_email
-                    )
-                    raise ValueError(f"Admin user {admin_email} not found in database")
-
-                # Get or create a user exchange for this category using admin user
-                user_exchanges = await db.exchanges.get_user_exchanges(admin_uid)
-                exchange_obj = None
-                for ue_dict in user_exchanges:
-                    if ue_dict.get("cat_ex_id") == cat_exchange.cat_ex_id:
-                        # Convert dict to Exchange model
-                        # The dict has: ex_name, ex_id, cat_ex_id, ex_named
-                        from fullon_orm.models import Exchange
-                        exchange_obj = Exchange(
-                            ex_id=ue_dict["ex_id"],
-                            uid=admin_uid,  # Use admin user ID
-                            cat_ex_id=ue_dict["cat_ex_id"],
-                            name=ue_dict["ex_named"],  # ex_named is the actual user exchange name
-                            test=True,
-                            active=True
-                        )
-                        # Add the relationship manually
-                        exchange_obj.cat_exchange = cat_exchange
-                        break
-
-                if not exchange_obj:
-                    # No exchange found for admin user - log error and fail
-                    logger.error(
-                        f"No exchange configuration found for admin user {admin_email} on {self.exchange_name}. "
-                        f"Admin must have exchange credentials configured to collect ticker data.",
-                        exchange_name=self.exchange_name,
-                        admin_email=admin_email,
-                        admin_uid=admin_uid
-                    )
-                    raise ValueError(
-                        f"No exchange {self.exchange_name} configured for admin user {admin_email}. "
-                        f"Admin credentials required for ticker data collection."
-                    )
-
-            # Get websocket handler for ticker streaming
-            # Use fullon_credentials to get API credentials with fallback to public access
+            # Credential provider (try to get credentials, fallback to public)
             def credential_provider(exchange):
                 try:
-                    # Use exchange.ex_id to get credentials from fullon_credentials
-                    secret, key = fullon_credentials(ex_id=exchange.ex_id)
-                    logger.info(
-                        f"Retrieved credentials for exchange {exchange.ex_id}",
-                        exchange_id=exchange.ex_id,
-                        exchange_name=self.exchange_name,
-                        admin_email=admin_email
-                    )
-                    return (key, secret)  # Return in (api_key, secret) format for ExchangeQueue
-                except ValueError as e:
-                    # No credentials found - fall back to public ticker access
-                    logger.info(
-                        f"No credentials found for exchange {exchange.ex_id} on {self.exchange_name}. "
-                        f"Using public ticker data access (common for demo/testing).",
-                        exchange_id=exchange.ex_id,
-                        exchange_name=self.exchange_name,
-                        admin_email=admin_email
-                    )
-                    # Return empty credentials for public access - many exchanges support public ticker streams
-                    return ("", "")
+                    secret, key = fullon_credentials(ex_id=1)  # Try to get credentials
+                    return (key, secret)
+                except ValueError:
+                    return ("", "")  # Public access fallback
 
-            self._handler = await ExchangeQueue.get_websocket_handler(
-                exchange_obj,
-                credential_provider
-            )
-
-            # Connect to exchange
+            # Get websocket handler
+            self._handler = await ExchangeQueue.get_websocket_handler(exchange_obj, credential_provider)
             await self._handler.connect()
 
-            # Subscribe to each symbol with callback
+            # Subscribe to symbols
             for symbol in self.symbols:
-                # Create wrapper callback that processes ticker data
                 async def ticker_callback(tick: Tick) -> None:
-                    await self._process_ticker(tick)
+                    if self._ticker_callback:
+                        await self._ticker_callback(tick)
 
-                # Subscribe and store subscription ID
-                sub_id = await self._handler.subscribe_ticker(
-                    symbol,
-                    callback=ticker_callback
-                )
-                # Store subscription ID, handling boolean responses
-                if isinstance(sub_id, str):
-                    self._subscription_ids[symbol] = sub_id
-                else:
-                    # For boolean or other responses, use symbol as identifier
-                    self._subscription_ids[symbol] = symbol
+                # Subscribe (fullon_exchange handles subscription management)
+                await self._handler.subscribe_ticker(symbol, callback=ticker_callback)
 
             self._status = ConnectionStatus.CONNECTED
-            logger.info(
-                f"Connected to {self.exchange_name} with {len(self.symbols)} symbols",
-                exchange=self.exchange_name,
-                symbols=self.symbols
-            )
+            logger.info(f"Connected to {self.exchange_name} with {len(self.symbols)} symbols")
 
         except Exception as e:
             self._status = ConnectionStatus.ERROR
-            logger.error(
-                f"Failed to connect to {self.exchange_name}: {e}",
-                exchange=self.exchange_name,
-                error=str(e)
-            )
-            # Cleanup on error
-            await self._cleanup()
-            # Schedule reconnection
-            asyncio.create_task(self.reconnect_with_backoff())
+            self._reconnect_count += 1
+            logger.error(f"Failed to connect to {self.exchange_name}: {e}")
             raise
 
     async def stop(self) -> None:
-        """
-        Stop the websocket connection gracefully.
-
-        This will:
-        1. Unsubscribe from all symbols
-        2. Disconnect from exchange
-        3. Shutdown factory
-        4. Clean up resources
-        """
+        """Stop websocket connection."""
         if self._status == ConnectionStatus.DISCONNECTED:
             return
 
-        try:
-            # Disconnect from exchange (this should handle unsubscribing automatically)
-            if self._handler:
-                try:
-                    await self._handler.disconnect()
-                    logger.info(f"Disconnected from {self.exchange_name}")
-                except Exception as e:
-                    logger.warning(
-                        f"Error disconnecting from {self.exchange_name}: {e}",
-                        exchange=self.exchange_name,
-                        error=str(e)
-                    )
-
-            # Clear subscription IDs
-            self._subscription_ids.clear()
-
-            # Shutdown factory
-            if self._factory_initialized:
-                await ExchangeQueue.shutdown_factory()
-                self._factory_initialized = False
-
-        finally:
-            self._status = ConnectionStatus.DISCONNECTED
-            self._handler = None
-            logger.info(
-                f"Disconnected from {self.exchange_name}",
-                exchange=self.exchange_name
-            )
-
-    def set_ticker_callback(self, callback: Callable) -> None:
-        """
-        Set callback function for processing ticker data.
-
-        Args:
-            callback: Async function that receives ticker data dict and processes it
-        """
-        self._ticker_callback = callback
-
-    async def _process_ticker(self, tick: Tick) -> None:
-        """
-        Process incoming ticker data.
-
-        This will:
-        1. Store Tick model in cache
-        2. Call custom callback if set
-        3. Update last ticker time
-
-        Args:
-            tick: Tick model object from fullon_exchange
-        """
-        try:
-            # Add debug logging
-            logger.info(f"🔄 EXCHANGE HANDLER DEBUG: Received tick from {self.exchange_name}")
-            logger.info(f"    📊 Tick: {tick.symbol} = ${tick.price}")
-
-            # Update last ticker time
-            self._last_ticker_time = tick.time if tick.time else time.time()
-
-            # Execute custom callback if set
-            if self._ticker_callback:
-                logger.info(f"📞 EXCHANGE HANDLER: Calling custom callback for {self.exchange_name}:{tick.symbol}")
-                try:
-                    await self._ticker_callback(tick)
-                    logger.info(f"✅ EXCHANGE HANDLER: Callback completed successfully")
-                except Exception as e:
-                    logger.error(
-                        f"❌ Error in custom ticker callback: {e}",
-                        exchange=self.exchange_name,
-                        symbol=tick.symbol,
-                        error=str(e)
-                    )
-            else:
-                logger.warning(f"⚠️ EXCHANGE HANDLER: No callback set for {self.exchange_name}")
-
-            # Store in cache (tick is already a Tick model)
-            try:
-                async with TickCache() as cache:
-                    await cache.set_ticker(tick)
-
-                logger.debug(
-                    f"Processed ticker: {tick.exchange}:{tick.symbol} = ${tick.price:.2f}",
-                    exchange=tick.exchange,
-                    symbol=tick.symbol,
-                    price=tick.price
-                )
-
-            except Exception as e:
-                logger.error(
-                    f"Failed to store ticker in cache: {e}",
-                    exchange=self.exchange_name,
-                    symbol=tick.symbol,
-                    error=str(e)
-                )
-
-        except Exception as e:
-            logger.error(
-                f"Error processing ticker: {e}",
-                exchange=self.exchange_name,
-                error=str(e)
-            )
-
-    async def reconnect_with_backoff(self) -> None:
-        """
-        Implement exponential backoff reconnection strategy.
-
-        This will:
-        1. Calculate backoff delay based on reconnect count
-        2. Wait for backoff period
-        3. Attempt reconnection
-        4. Reset count on successful connection
-        """
-        self._status = ConnectionStatus.RECONNECTING
-        self._reconnect_count += 1
-
-        # Calculate exponential backoff delay (max 60 seconds)
-        backoff_delay = min(2 ** self._reconnect_count, 60)
-
-        logger.info(
-            f"Reconnecting to {self.exchange_name} in {backoff_delay}s (attempt {self._reconnect_count})",
-            exchange=self.exchange_name,
-            delay=backoff_delay,
-            attempt=self._reconnect_count
-        )
-
-        # Wait for backoff period
-        await asyncio.sleep(backoff_delay)
+        logger.info(f"Stopping connection to {self.exchange_name}")
 
         try:
-            # Attempt reconnection
-            await self.start()
-            # Reset count on successful connection
-            self._reconnect_count = 0
-            logger.info(
-                f"Successfully reconnected to {self.exchange_name}",
-                exchange=self.exchange_name
-            )
-        except Exception as e:
-            logger.error(
-                f"Reconnection failed for {self.exchange_name}: {e}",
-                exchange=self.exchange_name,
-                error=str(e)
-            )
-            # Schedule another reconnection attempt
-            if self._reconnect_count < 10:  # Max 10 attempts
-                asyncio.create_task(self.reconnect_with_backoff())
-            else:
-                logger.error(
-                    f"Max reconnection attempts reached for {self.exchange_name}",
-                    exchange=self.exchange_name
-                )
-                self._status = ConnectionStatus.ERROR
-
-    async def _cleanup(self) -> None:
-        """Clean up resources on error."""
-        try:
+            # Disconnect (fullon_exchange handles unsubscription)
             if self._handler:
                 await self._handler.disconnect()
-        except Exception:
-            pass
 
-        if self._factory_initialized:
+        except Exception as e:
+            logger.warning(f"Error disconnecting from {self.exchange_name}: {e}")
+
+        finally:
+            self._handler = None
+            self._status = ConnectionStatus.DISCONNECTED
+
+            # Shutdown factory
             try:
                 await ExchangeQueue.shutdown_factory()
-                self._factory_initialized = False
-            except Exception:
-                pass
+            except Exception as e:
+                logger.warning(f"Error shutting down ExchangeQueue: {e}")
+
+    def set_ticker_callback(self, callback: Callable) -> None:
+        """Set callback function for ticker processing."""
+        self._ticker_callback = callback
 
     def get_status(self) -> ConnectionStatus:
         """Get current connection status."""
@@ -393,89 +133,3 @@ class ExchangeHandler:
     def get_reconnect_count(self) -> int:
         """Get number of reconnection attempts."""
         return self._reconnect_count
-
-    def get_last_ticker_time(self) -> float | None:
-        """Get timestamp of last received ticker."""
-        return self._last_ticker_time
-
-    async def update_symbols(self, new_symbols: list[str]) -> None:
-        """
-        Update the list of symbols to subscribe to.
-
-        This will:
-        1. Compare current symbols with new symbols
-        2. Unsubscribe from removed symbols
-        3. Subscribe to new symbols
-        4. Maintain existing subscriptions
-
-        Args:
-            new_symbols: Updated list of symbols to track
-        """
-        if self._status != ConnectionStatus.CONNECTED:
-            # Just update internal list if not connected
-            self.symbols = new_symbols
-            return
-
-        # Calculate differences
-        current_set = set(self.symbols)
-        new_set = set(new_symbols)
-
-        to_remove = current_set - new_set
-        to_add = new_set - current_set
-
-        # Unsubscribe from removed symbols
-        for symbol in to_remove:
-            if symbol in self._subscription_ids:
-                try:
-                    sub_id = self._subscription_ids[symbol]
-                    # Only call unsubscribe if we have a valid subscription ID (not True/False)
-                    if isinstance(sub_id, str) and sub_id != symbol:
-                        await self._handler.unsubscribe(sub_id)
-                    # For boolean or symbol-as-ID cases, let disconnect handle cleanup
-                    del self._subscription_ids[symbol]
-                    logger.info(
-                        f"Unsubscribed from {symbol} on {self.exchange_name}",
-                        symbol=symbol,
-                        exchange=self.exchange_name
-                    )
-                except Exception as e:
-                    logger.error(
-                        f"Error unsubscribing from {symbol}: {e}",
-                        symbol=symbol,
-                        exchange=self.exchange_name,
-                        error=str(e)
-                    )
-
-        # Subscribe to new symbols
-        for symbol in to_add:
-            try:
-                # Create wrapper callback
-                async def ticker_callback(tick: Tick) -> None:
-                    await self._process_ticker(tick)
-
-                # Subscribe and store subscription ID
-                sub_id = await self._handler.subscribe_ticker(
-                    symbol,
-                    callback=ticker_callback
-                )
-                # Store subscription ID, handling boolean responses
-                if isinstance(sub_id, str):
-                    self._subscription_ids[symbol] = sub_id
-                else:
-                    # For boolean or other responses, use symbol as identifier
-                    self._subscription_ids[symbol] = symbol
-                logger.info(
-                    f"Subscribed to {symbol} on {self.exchange_name}",
-                    symbol=symbol,
-                    exchange=self.exchange_name
-                )
-            except Exception as e:
-                logger.error(
-                    f"Error subscribing to {symbol}: {e}",
-                    symbol=symbol,
-                    exchange=self.exchange_name,
-                    error=str(e)
-                )
-
-        # Update internal list
-        self.symbols = new_symbols

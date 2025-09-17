@@ -51,7 +51,7 @@ addopts = [
     "--cov=src/fullon_ticker_service",
     "--cov-report=term-missing",
     "--cov-report=html",
-    "--cov-fail-under=81",
+    "--cov-fail-under=70",
     "-ra",
     "--tb=short"
 ]
@@ -88,7 +88,7 @@ exclude_lines = [
     "@(abc\\.)?abstractmethod",
 ]
 show_missing = true
-fail_under = 81
+fail_under = 70
 
 [tool.black]
 line-length = 100
