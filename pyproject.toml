@@ -1,6 +1,6 @@
 [project]
 name = "fullon-ticker-service"
-version = "0.1.1"
+version = "0.1.2"
 description = "Async daemon service for real-time cryptocurrency ticker data collection using websockets"
 authors = [
     {name = "ingmar", email = "ingmar@avocadoblock.com"}
