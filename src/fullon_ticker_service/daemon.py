@@ -66,45 +66,74 @@ class TickerDaemon:
 
                 if not admin_uid:
                     logger.error(f"Admin user not found: {admin_email}")
+                    self._status = DaemonStatus.ERROR
                     return
 
                 exchanges = await db.exchanges.get_user_exchanges(admin_uid)
+                if not exchanges:
+                    logger.error(f"No exchanges found for admin user: {admin_email}")
+                    self._status = DaemonStatus.ERROR
+                    return
 
+                logger.info(f"Found {len(exchanges)} exchanges for admin user")
+
+                # CRITICAL FIX: Bulk load ALL symbols once to avoid cache inconsistency
+                # Instead of per-exchange lookups that can hit stale cache entries,
+                # we load all symbols at once and filter in memory
+                all_symbols = await db.symbols.get_all()
+                logger.info(f"Bulk loaded {len(all_symbols)} total symbols from database")
+
+                # Get category exchanges for name lookup
+                cat_exchanges = await db.exchanges.get_cat_exchanges(all=True)
+                cat_exchange_map = {cat_ex.cat_ex_id: cat_ex.name for cat_ex in cat_exchanges}
+
+                successful_exchanges = 0
                 for exchange in exchanges:
-                    # Exchange objects have direct attribute access (not dict methods)
-                    cat_ex_id = exchange.cat_ex_id
+                    try:
+                        # Exchange objects have direct attribute access (not dict methods)
+                        cat_ex_id = exchange.cat_ex_id
+                        if not cat_ex_id:
+                            logger.warning(f"Exchange has no cat_ex_id: {exchange}")
+                            continue
 
-                    # Get exchange name from cat_ex_id
-                    cat_exchanges = await db.exchanges.get_cat_exchanges(all=True)
-                    exchange_name = None
-                    for cat_ex in cat_exchanges:
-                        if cat_ex.cat_ex_id == cat_ex_id:
-                            exchange_name = cat_ex.name
-                            break
+                        # Get exchange name from pre-loaded map
+                        exchange_name = cat_exchange_map.get(cat_ex_id)
+                        if not exchange_name:
+                            logger.warning(f"No exchange name found for cat_ex_id: {cat_ex_id}")
+                            continue
 
-                    if not exchange_name:
+                        # Filter symbols for this exchange from the bulk-loaded list
+                        exchange_symbols = [s for s in all_symbols if hasattr(s, 'cat_ex_id') and s.cat_ex_id == cat_ex_id]
+                        if not exchange_symbols:
+                            logger.warning(f"No symbols found for exchange {exchange_name} (cat_ex_id: {cat_ex_id})")
+                            continue
+
+                        symbol_list = [s.symbol for s in exchange_symbols]
+                        logger.info(f"Loaded {len(symbol_list)} symbols for {exchange_name}")
+
+                        # Create and start exchange handler
+                        handler = ExchangeHandler(exchange_name, symbol_list)
+
+                        # Set ticker callback
+                        async def ticker_callback(ticker_data):
+                            if self._ticker_manager:
+                                await self._ticker_manager.process_ticker(exchange_name, ticker_data)
+
+                        handler.set_ticker_callback(ticker_callback)
+                        await handler.start()
+
+                        self._exchange_handlers[exchange_name] = handler
+                        successful_exchanges += 1
+                        logger.info(f"Started handler for {exchange_name} with {len(symbol_list)} symbols")
+
+                    except Exception as e:
+                        logger.error(f"Failed to start handler for exchange {exchange_name if 'exchange_name' in locals() else 'unknown'}: {e}")
                         continue
 
-                    # Get symbols for this exchange
-                    symbols = await db.symbols.get_all(exchange_name=exchange_name)
-                    if not symbols:
-                        continue
-
-                    symbol_list = [s.symbol for s in symbols]
-
-                    # Create and start exchange handler
-                    handler = ExchangeHandler(exchange_name, symbol_list)
-
-                    # Set ticker callback
-                    async def ticker_callback(ticker_data):
-                        if self._ticker_manager:
-                            await self._ticker_manager.process_ticker(exchange_name, ticker_data)
-
-                    handler.set_ticker_callback(ticker_callback)
-                    await handler.start()
-
-                    self._exchange_handlers[exchange_name] = handler
-                    logger.info(f"Started handler for {exchange_name} with {len(symbol_list)} symbols")
+                if successful_exchanges == 0:
+                    logger.error("No exchange handlers started successfully")
+                    self._status = DaemonStatus.ERROR
+                    return
 
             # Register process
             await self._register_process()
