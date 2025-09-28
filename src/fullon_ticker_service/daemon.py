@@ -71,8 +71,8 @@ class TickerDaemon:
                 exchanges = await db.exchanges.get_user_exchanges(admin_uid)
 
                 for exchange in exchanges:
-                    ex_name = exchange.get('ex_named', 'unknown')
-                    cat_ex_id = exchange.get('cat_ex_id')
+                    # Exchange objects have direct attribute access (not dict methods)
+                    cat_ex_id = exchange.cat_ex_id
 
                     # Get exchange name from cat_ex_id
                     cat_exchanges = await db.exchanges.get_cat_exchanges(all=True)

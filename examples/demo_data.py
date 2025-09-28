@@ -367,12 +367,13 @@ async def install_exchanges_internal(db: DatabaseContext, uid: int) -> Tuple[Opt
         user_exchanges = await db.exchanges.get_user_exchanges(uid)
         existing_exchange = None
         for ue in user_exchanges:
-            if ue.get('ex_named') == user_exchange_name and ue.get('cat_ex_id') == cat_ex_id:
+            # Exchange objects have direct attribute access (not dict methods)
+            if ue.name == user_exchange_name and ue.cat_ex_id == cat_ex_id:
                 existing_exchange = ue
                 break
 
         if existing_exchange:
-            ex_id = existing_exchange.get('ex_id')
+            ex_id = existing_exchange.ex_id
             print_info(f"  User exchange '{user_exchange_name}' already exists")
             created_exchanges.append((ex_id, cat_ex_id))
         else:
@@ -405,8 +406,9 @@ async def install_symbols_for_all_exchanges_internal(db: DatabaseContext, uid: i
     user_exchanges = await db.exchanges.get_user_exchanges(uid)
 
     for ue_dict in user_exchanges:
-        cat_ex_id = ue_dict.get('cat_ex_id')
-        ex_name = ue_dict.get('ex_named', 'unknown')
+        # Exchange objects have direct attribute access (not dict methods)
+        cat_ex_id = ue_dict.cat_ex_id
+        ex_name = ue_dict.name
 
         if cat_ex_id:
             print_info(f"  Installing symbols for {ex_name} (cat_ex_id: {cat_ex_id})")
