@@ -61,21 +61,15 @@ class TickerDaemon:
 
             # Get exchanges and symbols from database
             async with DatabaseContext() as db:
-                admin_email = os.getenv("ADMIN_MAIL", "admin@fullon")
-                admin_uid = await db.users.get_user_id(admin_email)
-
-                if not admin_uid:
-                    logger.error(f"Admin user not found: {admin_email}")
-                    self._status = DaemonStatus.ERROR
-                    return
-
-                exchanges = await db.exchanges.get_user_exchanges(admin_uid)
+                # Use active cat exchanges instead of user-specific exchanges
+                # This ensures we process all available exchanges in the system
+                exchanges = await db.exchanges.get_cat_exchanges(all=False)  # Only active exchanges
                 if not exchanges:
-                    logger.error(f"No exchanges found for admin user: {admin_email}")
+                    logger.error("No active exchanges found in database")
                     self._status = DaemonStatus.ERROR
                     return
 
-                logger.info(f"Found {len(exchanges)} exchanges for admin user")
+                logger.info(f"Found {len(exchanges)} active exchanges")
 
                 # CRITICAL FIX: Bulk load ALL symbols once to avoid cache inconsistency
                 # Instead of per-exchange lookups that can hit stale cache entries,
@@ -83,23 +77,19 @@ class TickerDaemon:
                 all_symbols = await db.symbols.get_all()
                 logger.info(f"Bulk loaded {len(all_symbols)} total symbols from database")
 
-                # Get category exchanges for name lookup
-                cat_exchanges = await db.exchanges.get_cat_exchanges(all=True)
-                cat_exchange_map = {cat_ex.cat_ex_id: cat_ex.name for cat_ex in cat_exchanges}
-
                 successful_exchanges = 0
                 for exchange in exchanges:
                     try:
-                        # Exchange objects have direct attribute access (not dict methods)
+                        # Cat exchange objects have name and cat_ex_id directly
                         cat_ex_id = exchange.cat_ex_id
                         if not cat_ex_id:
                             logger.warning(f"Exchange has no cat_ex_id: {exchange}")
                             continue
 
-                        # Get exchange name from pre-loaded map
-                        exchange_name = cat_exchange_map.get(cat_ex_id)
+                        # Get exchange name directly from cat exchange
+                        exchange_name = exchange.name if hasattr(exchange, 'name') else None
                         if not exchange_name:
-                            logger.warning(f"No exchange name found for cat_ex_id: {cat_ex_id}")
+                            logger.warning(f"No name found for exchange with cat_ex_id: {cat_ex_id}")
                             continue
 
                         # Filter symbols for this exchange from the bulk-loaded list

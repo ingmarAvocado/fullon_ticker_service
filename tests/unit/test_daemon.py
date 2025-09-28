@@ -58,8 +58,7 @@ class TestTickerDaemon:
             mock_db_context.return_value.__aenter__.return_value = mock_db
 
             # Mock empty exchanges (no actual connections)
-            mock_db.users.get_user_id.return_value = 1
-            mock_db.exchanges.get_user_exchanges.return_value = []
+            mock_db.exchanges.get_cat_exchanges.return_value = []
 
             # Test start with no exchanges
             await daemon.start()
@@ -75,13 +74,7 @@ class TestTickerDaemon:
             daemon._status = DaemonStatus.STOPPED
             daemon._running = False
 
-            # Now test with exchanges
-            mock_exchanges = [
-                MagicMock(cat_ex_id=1, name="binance1")
-            ]
-            mock_db.exchanges.get_user_exchanges.return_value = mock_exchanges
-
-            # Mock category exchanges
+            # Now test with exchanges (using cat exchanges directly)
             mock_cat_ex = MagicMock()
             mock_cat_ex.cat_ex_id = 1
             mock_cat_ex.name = "binance"
@@ -145,25 +138,16 @@ class TestTickerDaemon:
             mock_db = AsyncMock()
             mock_db_context.return_value.__aenter__.return_value = mock_db
 
-            # Mock admin user lookup
-            mock_db.users.get_user_id.return_value = 1
+            # No need for admin user lookup anymore (daemon uses cat exchanges)
 
-            # Mock user exchanges (3 exchanges as per CLAUDE.md)
-            mock_exchanges = [
-                MagicMock(cat_ex_id=1, name="binance1"),
-                MagicMock(cat_ex_id=2, name="kraken1"),
-                MagicMock(cat_ex_id=3, name="hyperliquid1")
-            ]
-            mock_db.exchanges.get_user_exchanges.return_value = mock_exchanges
-
-            # Mock category exchanges lookup
-            mock_cat_exchanges = []
+            # Mock category exchanges (3 exchanges as per CLAUDE.md)
+            mock_exchanges = []
             for cat_ex_id, name in [(1, "binance"), (2, "kraken"), (3, "hyperliquid")]:
                 mock_cat_ex = MagicMock()
                 mock_cat_ex.cat_ex_id = cat_ex_id
                 mock_cat_ex.name = name
-                mock_cat_exchanges.append(mock_cat_ex)
-            mock_db.exchanges.get_cat_exchanges.return_value = mock_cat_exchanges
+                mock_exchanges.append(mock_cat_ex)
+            mock_db.exchanges.get_cat_exchanges.return_value = mock_exchanges
 
             # Mock bulk symbol loading (replaces per-exchange lookups)
             all_symbols = [
@@ -223,25 +207,21 @@ class TestTickerDaemon:
             mock_db = AsyncMock()
             mock_db_context.return_value.__aenter__.return_value = mock_db
 
-            # Mock admin user lookup
-            mock_db.users.get_user_id.return_value = 1
+            # No need for admin user lookup anymore (daemon uses cat exchanges)
 
-            # Mock user exchanges
-            mock_exchanges = [
-                MagicMock(cat_ex_id=1, name="binance1"),
-                MagicMock(cat_ex_id=2, name="kraken1"),
-                MagicMock(cat_ex_id=None, name="broken1")  # This should be skipped
-            ]
-            mock_db.exchanges.get_user_exchanges.return_value = mock_exchanges
-
-            # Mock category exchanges lookup
-            mock_cat_exchanges = []
+            # Mock category exchanges with edge cases
+            mock_exchanges = []
             for cat_ex_id, name in [(1, "binance"), (2, "kraken")]:
                 mock_cat_ex = MagicMock()
                 mock_cat_ex.cat_ex_id = cat_ex_id
                 mock_cat_ex.name = name
-                mock_cat_exchanges.append(mock_cat_ex)
-            mock_db.exchanges.get_cat_exchanges.return_value = mock_cat_exchanges
+                mock_exchanges.append(mock_cat_ex)
+            # Add broken exchange without cat_ex_id (should be skipped)
+            broken_ex = MagicMock()
+            broken_ex.name = "broken1"
+            broken_ex.cat_ex_id = None
+            mock_exchanges.append(broken_ex)
+            mock_db.exchanges.get_cat_exchanges.return_value = mock_exchanges
 
             # Mock bulk symbols - only binance has symbols
             all_symbols = [
@@ -276,11 +256,10 @@ class TestTickerDaemon:
             mock_db = AsyncMock()
             mock_db_context.return_value.__aenter__.return_value = mock_db
 
-            # Mock admin user lookup
-            mock_db.users.get_user_id.return_value = 1
+            # No need for admin user lookup anymore (daemon uses cat exchanges)
 
             # Mock empty exchanges
-            mock_db.exchanges.get_user_exchanges.return_value = []
+            mock_db.exchanges.get_cat_exchanges.return_value = []
 
             # Test start with no exchanges
             await daemon.start()
@@ -300,25 +279,16 @@ class TestTickerDaemon:
             mock_db = AsyncMock()
             mock_db_context.return_value.__aenter__.return_value = mock_db
 
-            # Mock admin user lookup
-            mock_db.users.get_user_id.return_value = 1
+            # No need for admin user lookup anymore (daemon uses cat exchanges)
 
-            # Mock user exchanges (3 exchanges)
-            mock_exchanges = [
-                MagicMock(cat_ex_id=1, name="binance1"),
-                MagicMock(cat_ex_id=2, name="kraken1"),
-                MagicMock(cat_ex_id=3, name="hyperliquid1")
-            ]
-            mock_db.exchanges.get_user_exchanges.return_value = mock_exchanges
-
-            # Mock category exchanges lookup
-            mock_cat_exchanges = []
+            # Mock category exchanges (3 exchanges)
+            mock_exchanges = []
             for cat_ex_id, name in [(1, "binance"), (2, "kraken"), (3, "hyperliquid")]:
                 mock_cat_ex = MagicMock()
                 mock_cat_ex.cat_ex_id = cat_ex_id
                 mock_cat_ex.name = name
-                mock_cat_exchanges.append(mock_cat_ex)
-            mock_db.exchanges.get_cat_exchanges.return_value = mock_cat_exchanges
+                mock_exchanges.append(mock_cat_ex)
+            mock_db.exchanges.get_cat_exchanges.return_value = mock_exchanges
 
             # Mock ALL symbols returned at once (bulk loading)
             all_symbols = [
@@ -397,22 +367,14 @@ class TestTickerDaemon:
             mock_db = AsyncMock()
             mock_db_context.return_value.__aenter__.return_value = mock_db
 
-            # Mock admin user lookup
-            mock_db.users.get_user_id.return_value = 1
+            # No need for admin user lookup anymore (daemon uses cat exchanges)
 
-            # Mock user exchanges
+            # Mock category exchanges (2 exchanges only)
             mock_exchanges = [
-                MagicMock(cat_ex_id=1, name="binance1"),
-                MagicMock(cat_ex_id=2, name="kraken1")
-            ]
-            mock_db.exchanges.get_user_exchanges.return_value = mock_exchanges
-
-            # Mock category exchanges
-            mock_cat_exchanges = [
                 MagicMock(cat_ex_id=1, name="binance"),
                 MagicMock(cat_ex_id=2, name="kraken")
             ]
-            mock_db.exchanges.get_cat_exchanges.return_value = mock_cat_exchanges
+            mock_db.exchanges.get_cat_exchanges.return_value = mock_exchanges
 
             # Mock empty symbols (no symbols in database)
             mock_db.symbols.get_all.return_value = []
@@ -441,23 +403,13 @@ class TestTickerDaemon:
             mock_db = AsyncMock()
             mock_db_context.return_value.__aenter__.return_value = mock_db
 
-            # Mock admin user lookup
-            mock_db.users.get_user_id.return_value = 1
+            # No need for admin user lookup anymore (daemon uses cat exchanges)
 
-            # Mock only one exchange configured for user
-            mock_exchanges = [
-                MagicMock(cat_ex_id=2, name="kraken1")  # Only kraken
-            ]
-            mock_db.exchanges.get_user_exchanges.return_value = mock_exchanges
-
-            # Mock category exchanges with proper name attributes
-            mock_cat_exchanges = []
-            for cat_ex_id, name in [(1, "binance"), (2, "kraken"), (3, "hyperliquid")]:
-                mock_cat_ex = MagicMock()
-                mock_cat_ex.cat_ex_id = cat_ex_id
-                mock_cat_ex.name = name
-                mock_cat_exchanges.append(mock_cat_ex)
-            mock_db.exchanges.get_cat_exchanges.return_value = mock_cat_exchanges
+            # Mock only kraken active (test filters symbols correctly)
+            kraken = MagicMock()
+            kraken.cat_ex_id = 2
+            kraken.name = "kraken"  # Set name as a property value
+            mock_db.exchanges.get_cat_exchanges.return_value = [kraken]
 
             # Mock ALL symbols from all exchanges
             all_symbols = [
