@@ -143,7 +143,8 @@ async def start(use_test_db=False):
             print(f"📊 Monitoring {len(exchanges)} exchange(s) for admin user")
 
             for exchange in exchanges:
-                ex_name = exchange.get('ex_named', 'unknown')
+                # Exchange objects have direct attribute access (not dict methods)
+                ex_name = exchange.name
                 print(f"  • {ex_name}")
 
         print("🔄 Starting ticker monitoring loop (Ctrl+C to stop)...")
