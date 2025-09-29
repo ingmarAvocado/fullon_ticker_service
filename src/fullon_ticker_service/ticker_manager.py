@@ -39,6 +39,11 @@ class TickerManager:
             return
 
         try:
+            # Ensure exchange field is set correctly on the tick object
+            if not hasattr(tick, 'exchange') or tick.exchange != exchange_name:
+                logger.warning(f"Tick exchange mismatch: tick.exchange='{getattr(tick, 'exchange', 'MISSING')}' vs expected='{exchange_name}', fixing...")
+                tick.exchange = exchange_name
+
             # Store in cache (fullon_cache handles the complexity)
             async with TickCache() as cache:
                 await cache.set_ticker(tick)

@@ -1,6 +1,6 @@
 [project]
 name = "fullon-ticker-service"
-version = "0.1.2"
+version = "0.1.3"
 description = "Async daemon service for real-time cryptocurrency ticker data collection using websockets"
 authors = [
     {name = "ingmar", email = "ingmar@avocadoblock.com"}
@@ -18,7 +18,6 @@ dependencies = [
     "fullon-orm @ git+ssh://git@github.com/ingmarAvocado/fullon_orm.git@main",
     "fullon-cache @ git+ssh://git@github.com/ingmarAvocado/fullon_cache.git@main",
     "fullon-exchange @ git+ssh://git@github.com/ingmarAvocado/fullon_exchange.git@main",
-    "fullon-credentials @ git+ssh://git@github.com/ingmarAvocado/fullon_credentials.git@main",
 ]
 
 [project.optional-dependencies]
