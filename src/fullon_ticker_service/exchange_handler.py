@@ -70,10 +70,13 @@ class ExchangeHandler:
             # Credential provider (try to get credentials, fallback to public)
             def credential_provider(exchange):
                 try:
-                    secret, key = fullon_credentials(ex_id=1)  # Try to get credentials
+                    # Try to get credentials for this exchange (may not exist for demo data)
+                    secret, key = fullon_credentials(ex_id=1)
                     return (key, secret)
                 except ValueError:
-                    return ("", "")  # Public access fallback
+                    # Fallback to public access for ticker data (most exchanges support this)
+                    logger.info(f"No credentials found for {self.exchange_name}, using public access")
+                    return ("", "")
 
             # Get websocket handler
             self._handler = await ExchangeQueue.get_websocket_handler(exchange_obj, credential_provider)
@@ -81,7 +84,8 @@ class ExchangeHandler:
 
             # Subscribe to symbols
             for symbol in self.symbols:
-                async def ticker_callback(tick: Tick) -> None:
+                # Fix closure bug: capture symbol value, not reference
+                async def ticker_callback(tick: Tick, captured_symbol=symbol) -> None:
                     if self._ticker_callback:
                         await self._ticker_callback(tick)
 

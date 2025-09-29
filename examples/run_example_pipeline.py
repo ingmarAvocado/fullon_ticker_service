@@ -76,9 +76,12 @@ async def show_system_status():
         if ticker_stats:
             total_tickers = ticker_stats.get('total_tickers', 0)
             active_symbols = ticker_stats.get('active_symbols_count', {})
+            active_symbols_list = ticker_stats.get('active_symbols', {})
             print(f"📊 Ticker Stats: {total_tickers} total processed")
             for ex, count in active_symbols.items():
-                print(f"  📈 {ex}: {count} symbols")
+                symbols_for_ex = active_symbols_list.get(ex, [])
+                symbols_str = ", ".join(symbols_for_ex) if symbols_for_ex else "none"
+                print(f"  📈 {ex}: {count} symbols ({symbols_str})")
 
     # Show registered processes
     try:
@@ -130,21 +133,15 @@ async def start(use_test_db=False):
 
         print("✅ Ticker daemon started")
 
-        # Show what we're monitoring
+        # Show what we're monitoring (use cat exchanges since that's what daemon uses)
         async with DatabaseContext() as db:
-            admin_email = os.getenv("ADMIN_MAIL", "admin@fullon")
-            admin_uid = await db.users.get_user_id(admin_email)
+            # Get active cat exchanges (this matches what the daemon actually loads)
+            cat_exchanges = await db.exchanges.get_cat_exchanges(all=False)
+            print(f"📊 Monitoring {len(cat_exchanges)} active exchange(s)")
 
-            if not admin_uid:
-                print(f"❌ Admin user not found: {admin_email}")
-                return
-
-            exchanges = await db.exchanges.get_user_exchanges(admin_uid)
-            print(f"📊 Monitoring {len(exchanges)} exchange(s) for admin user")
-
-            for exchange in exchanges:
-                # Exchange objects have direct attribute access (not dict methods)
-                ex_name = exchange.name
+            for cat_exchange in cat_exchanges:
+                # Cat exchange objects have direct attribute access
+                ex_name = cat_exchange.name
                 print(f"  • {ex_name}")
 
         print("🔄 Starting ticker monitoring loop (Ctrl+C to stop)...")
@@ -166,19 +163,51 @@ async def start(use_test_db=False):
             loop_count += 1
 
             async with TickCache() as cache:
-                tickers = await cache.get_all_tickers()
+                # WORKAROUND: get_all_tickers() appears to filter results,
+                # so we retrieve tickers directly for all known symbols from all exchanges
+                tickers = []
+
+                # Get known symbols from database (matches what daemon loads)
+                async with DatabaseContext() as db:
+                    exchanges = await db.exchanges.get_cat_exchanges(all=False)
+                    all_symbols = await db.symbols.get_all()
+
+                    for exchange in exchanges:
+                        exchange_symbols = [s for s in all_symbols if hasattr(s, 'cat_ex_id') and s.cat_ex_id == exchange.cat_ex_id]
+
+                        for symbol_obj in exchange_symbols:
+                            try:
+                                ticker = await cache.get_ticker(symbol_obj.symbol, exchange.name)
+                                if ticker:
+                                    tickers.append(ticker)
+                            except Exception:
+                                # Symbol not in cache yet, skip
+                                pass
 
                 if tickers:
                     # Show latest tickers
                     fresh_tickers = [t for t in tickers if (time.time() - t.time) < 60]
-                    print(f"📈 Active tickers: {len(fresh_tickers)}/{len(tickers)}")
+                    stale_tickers = [t for t in tickers if (time.time() - t.time) >= 60]
 
-                    # Show a few examples
-                    for ticker in fresh_tickers[:3]:
-                        age = time.time() - ticker.time
-                        print(f"  💰 {ticker.symbol} ({ticker.exchange}): ${ticker.price:.6f} ({age:.1f}s ago)")
+                    print(f"📈 Tickers: {len(fresh_tickers)} fresh + {len(stale_tickers)} stale = {len(tickers)} total")
+
+                    # Show all fresh tickers (not just 3)
+                    if fresh_tickers:
+                        print("💰 Fresh ticker data:")
+                        for ticker in fresh_tickers[:8]:  # Show up to 8 fresh tickers
+                            age = time.time() - ticker.time
+                            volume = ticker.volume if ticker.volume is not None else 0.0
+                            print(f"  📊 {ticker.symbol:15} ({ticker.exchange:10}): ${ticker.price:>12.6f} | vol: {volume:>10.2f} | {age:4.1f}s ago")
+
+                    # Show some stale tickers for debugging
+                    if stale_tickers:
+                        print(f"🕐 Showing 2 stale tickers (older than 60s):")
+                        for ticker in stale_tickers[:2]:
+                            age = time.time() - ticker.time
+                            volume = ticker.volume if ticker.volume is not None else 0.0
+                            print(f"  📊 {ticker.symbol:15} ({ticker.exchange:10}): ${ticker.price:>12.6f} | vol: {volume:>10.2f} | {age:4.1f}s ago")
                 else:
-                    print("⏳ Waiting for ticker data...")
+                    print("⏳ Waiting for ticker data... (cache is empty)")
 
             # Every 10 seconds, show daemon and process status
             if loop_count % 10 == 0:

@@ -43,13 +43,13 @@ class TestDemoDataORMAccess:
         try:
             from examples.demo_data import (
                 install_exchanges_internal,
-                install_symbols_for_all_exchanges_internal,
                 install_symbols_internal,
+                install_admin_user_internal,
             )
             # If import succeeds, the module syntax is correct
             assert callable(install_exchanges_internal)
-            assert callable(install_symbols_for_all_exchanges_internal)
             assert callable(install_symbols_internal)
+            assert callable(install_admin_user_internal)
         except ImportError as e:
             pytest.fail(f"Failed to import demo_data functions: {e}")
         except AttributeError as e:

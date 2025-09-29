@@ -13,7 +13,7 @@ from fullon_ticker_service.daemon import TickerDaemon
 
 @pytest.mark.asyncio
 async def test_daemon_uses_exchange_attributes():
-    """Test that daemon correctly accesses Exchange object attributes."""
+    """Test that daemon correctly accesses cat exchange object attributes."""
     daemon = TickerDaemon()
 
     with patch('fullon_ticker_service.daemon.DatabaseContext') as mock_db:
@@ -42,8 +42,8 @@ async def test_daemon_uses_exchange_attributes():
         # This should not raise AttributeError
         await daemon.start()
 
-        # Verify get_user_exchanges was called
-        mock_ctx.exchanges.get_user_exchanges.assert_called_once_with(1)
+        # Verify get_cat_exchanges was called (daemon uses cat exchanges now)
+        mock_ctx.exchanges.get_cat_exchanges.assert_called_once_with(all=False)
 
 
 @pytest.mark.asyncio

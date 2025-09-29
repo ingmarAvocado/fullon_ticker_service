@@ -104,10 +104,10 @@ class TickerDaemon:
                         # Create and start exchange handler
                         handler = ExchangeHandler(exchange_name, symbol_list)
 
-                        # Set ticker callback
-                        async def ticker_callback(ticker_data):
+                        # Set ticker callback (fix closure bug: capture exchange_name value)
+                        async def ticker_callback(ticker_data, captured_exchange_name=exchange_name):
                             if self._ticker_manager:
-                                await self._ticker_manager.process_ticker(exchange_name, ticker_data)
+                                await self._ticker_manager.process_ticker(captured_exchange_name, ticker_data)
 
                         handler.set_ticker_callback(ticker_callback)
                         await handler.start()
