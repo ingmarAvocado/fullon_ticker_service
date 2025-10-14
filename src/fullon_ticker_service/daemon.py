@@ -5,224 +5,160 @@ Provides basic start/stop/health functionality for ticker collection examples.
 Follows LRRS principles - minimal integration code using fullon ecosystem.
 """
 
-import asyncio
-import os
-from enum import Enum
-from typing import Any
-
 from fullon_cache import ProcessCache
-from fullon_cache.process_cache import ProcessType
+from fullon_cache.process_cache import ProcessStatus, ProcessType
 from fullon_log import get_component_logger
 from fullon_orm import DatabaseContext
+from fullon_orm.models import Symbol
 
-from .exchange_handler import ExchangeHandler
-from .ticker_manager import TickerManager
+from .ticker.live_collector import LiveTickerCollector
 
 logger = get_component_logger("fullon.ticker.daemon")
 
 
-class DaemonStatus(Enum):
-    """Basic daemon status."""
-    STOPPED = "stopped"
-    RUNNING = "running"
-    ERROR = "error"
-
-
 class TickerDaemon:
-    """
-    Simple ticker service daemon.
-
-    Provides basic functionality needed by examples:
-    - start() - start ticker collection
-    - stop() - stop ticker collection
-    - process_ticker(symbol) - single symbol processing
-    - get_health() - basic health info
-    """
+    """Simple ticker service daemon."""
 
     def __init__(self) -> None:
-        """Initialize the ticker daemon."""
-        self._status = DaemonStatus.STOPPED
-        self._exchange_handlers: dict[str, ExchangeHandler] = {}
-        self._running = False
-        self._ticker_manager: TickerManager | None = None
+        self._status = "stopped"
+        self._live_collector: LiveTickerCollector | None = None
         self._process_id: str | None = None
+        self._symbols: list = []
 
     async def start(self) -> None:
-        """Start the ticker daemon - get exchanges from database and start collection."""
-        if self._running:
+        """Start the ticker daemon with proper symbol initialization."""
+        if self._status == "running":
             return
 
         logger.info("Starting ticker daemon")
-        self._status = DaemonStatus.RUNNING
+        self._status = "running"
 
         try:
-            # Initialize ticker manager
-            self._ticker_manager = TickerManager()
-
-            # Get exchanges and symbols from database
+            # Load and initialize ALL symbols FIRST (like ohlcv_service)
             async with DatabaseContext() as db:
-                # Use active cat exchanges instead of user-specific exchanges
-                # This ensures we process all available exchanges in the system
-                exchanges = await db.exchanges.get_cat_exchanges(all=False)  # Only active exchanges
-                if not exchanges:
-                    logger.error("No active exchanges found in database")
-                    self._status = DaemonStatus.ERROR
-                    return
-
-                logger.info(f"Found {len(exchanges)} active exchanges")
-
-                # CRITICAL FIX: Bulk load ALL symbols once to avoid cache inconsistency
-                # Instead of per-exchange lookups that can hit stale cache entries,
-                # we load all symbols at once and filter in memory
                 all_symbols = await db.symbols.get_all()
-                logger.info(f"Bulk loaded {len(all_symbols)} total symbols from database")
 
-                successful_exchanges = 0
-                for exchange in exchanges:
-                    try:
-                        # Cat exchange objects have name and cat_ex_id directly
-                        cat_ex_id = exchange.cat_ex_id
-                        if not cat_ex_id:
-                            logger.warning(f"Exchange has no cat_ex_id: {exchange}")
-                            continue
+            self._symbols = all_symbols
 
-                        # Get exchange name directly from cat exchange
-                        exchange_name = exchange.name if hasattr(exchange, 'name') else None
-                        if not exchange_name:
-                            logger.warning(f"No name found for exchange with cat_ex_id: {cat_ex_id}")
-                            continue
+            if all_symbols:
+                logger.info("Loaded symbols", symbol_count=len(all_symbols))
+            else:
+                logger.warning("No symbols found in database")
 
-                        # Filter symbols for this exchange from the bulk-loaded list
-                        exchange_symbols = [s for s in all_symbols if hasattr(s, 'cat_ex_id') and s.cat_ex_id == cat_ex_id]
-                        if not exchange_symbols:
-                            logger.warning(f"No symbols found for exchange {exchange_name} (cat_ex_id: {cat_ex_id})")
-                            continue
-
-                        symbol_list = [s.symbol for s in exchange_symbols]
-                        logger.info(f"Loaded {len(symbol_list)} symbols for {exchange_name}")
-
-                        # Create and start exchange handler
-                        handler = ExchangeHandler(exchange_name, symbol_list)
-
-                        # Set ticker callback (fix closure bug: capture exchange_name value)
-                        async def ticker_callback(ticker_data, captured_exchange_name=exchange_name):
-                            if self._ticker_manager:
-                                await self._ticker_manager.process_ticker(captured_exchange_name, ticker_data)
-
-                        handler.set_ticker_callback(ticker_callback)
-                        await handler.start()
-
-                        self._exchange_handlers[exchange_name] = handler
-                        successful_exchanges += 1
-                        logger.info(f"Started handler for {exchange_name} with {len(symbol_list)} symbols")
-
-                    except Exception as e:
-                        logger.error(f"Failed to start handler for exchange {exchange_name if 'exchange_name' in locals() else 'unknown'}: {e}")
-                        continue
-
-                if successful_exchanges == 0:
-                    logger.error("No exchange handlers started successfully")
-                    self._status = DaemonStatus.ERROR
-                    return
+            # Initialize collector with symbols
+            self._live_collector = LiveTickerCollector(symbols=self._symbols)
 
             # Register process
             await self._register_process()
 
-            self._running = True
-            logger.info(f"Ticker daemon started with {len(self._exchange_handlers)} exchanges")
+            # Start collection (auto-init/shutdown handled by ExchangeQueue)
+            await self._live_collector.start_collection()
+
+            logger.info("Ticker daemon started successfully")
 
         except Exception as e:
-            logger.error(f"Failed to start ticker daemon: {e}")
-            self._status = DaemonStatus.ERROR
+            logger.error("Failed to start ticker daemon", error=str(e))
+            self._status = "error"
             raise
 
     async def stop(self) -> None:
         """Stop the ticker daemon."""
-        if not self._running:
+        if self._status != "running":
             return
 
         logger.info("Stopping ticker daemon")
 
-        # Stop all exchange handlers
-        for handler in self._exchange_handlers.values():
-            await handler.stop()
-
-        self._exchange_handlers.clear()
+        # Stop collector
+        if self._live_collector:
+            await self._live_collector.stop_collection()
 
         # Unregister process
         await self._unregister_process()
 
-        self._running = False
-        self._ticker_manager = None
-        self._status = DaemonStatus.STOPPED
-
+        self._status = "stopped"
         logger.info("Ticker daemon stopped")
 
     def is_running(self) -> bool:
         """Check if daemon is running."""
-        return self._running
+        return self._status == "running"
 
-    async def get_health(self) -> dict[str, Any]:
-        """Get basic health status for status display."""
+    async def process_ticker(self, symbol: Symbol) -> None:
+        """
+        Process a single symbol for ticker collection.
+
+        Behavior depends on daemon state:
+        - If daemon is running: Adds symbol to existing collector dynamically
+        - If daemon is not running: Starts fresh daemon for single symbol
+
+        Args:
+            symbol: Symbol model instance from fullon_orm
+
+        Raises:
+            ValueError: If symbol parameter is invalid
+        """
+        # Validate symbol structure
+        if not symbol or not hasattr(symbol, 'symbol') or not hasattr(symbol, 'cat_exchange'):
+            raise ValueError("Invalid symbol - must be Symbol model instance")
+
+        # Check daemon state and handle accordingly
+        if self._live_collector and self._status == "running":
+            # Daemon is fully running - add symbol dynamically
+            # Check both collector existence AND status for safety
+            if self._live_collector.is_collecting(symbol):
+                logger.info("Symbol already collecting", symbol=symbol.symbol)
+                return
+
+            logger.info(
+                "Adding symbol to running daemon",
+                symbol=symbol.symbol,
+                exchange=symbol.cat_exchange.name,
+            )
+            # Fall through to start collection
+
+        elif not self._live_collector:
+            # Daemon not running - start fresh for single symbol
+            # Collector doesn't exist, so start from scratch
+            logger.info(
+                "Starting ticker collection for single symbol",
+                symbol=symbol.symbol,
+                exchange=symbol.cat_exchange.name,
+            )
+
+            self._symbols = [symbol]
+            self._live_collector = LiveTickerCollector()  # No symbols in constructor
+            self._status = "running"
+            # Continue to start collection (per-symbol registration happens in collector)
+
+        else:
+            # Partially running state - collector exists but status is not "running"
+            # This indicates inconsistent state (crash during startup, manual manipulation, etc.)
+            logger.error(
+                "Daemon in inconsistent state - cannot proceed",
+                collector_exists=bool(self._live_collector),
+                status=self._status
+            )
+            return
+
+        # Start collection (common final step)
+        logger.info("Starting ticker collector for symbol", symbol=symbol.symbol)
+        await self._live_collector.start_symbol(symbol)
+
+    async def get_health(self) -> dict:
+        """Get health status."""
         health = {
-            "status": self._status.value,
-            "running": self._running,
-            "exchanges": {},
-            "process_id": self._process_id
+            "status": self._status,
+            "running": self.is_running(),
+            "process_id": self._process_id,
+            "collector": "active" if self._live_collector else "inactive"
         }
 
-        # Get exchange handler status
-        for exchange_name, handler in self._exchange_handlers.items():
-            health["exchanges"][exchange_name] = {
-                "connected": handler.get_status().value == "connected",
-                "reconnects": handler.get_reconnect_count()
-            }
-
-        # Get ticker stats
-        if self._ticker_manager:
-            health["ticker_stats"] = self._ticker_manager.get_ticker_stats()
+        if self._live_collector:
+            health["exchanges"] = list(self._live_collector.websocket_handlers.keys())
+            health["symbol_count"] = len(self._symbols)
 
         return health
 
-    async def process_ticker(self, symbol) -> None:
-        """
-        Single symbol processing for examples.
 
-        Used by single_ticker_loop_example.py for simple cases.
-        """
-        if self._running:
-            await self.stop()
-
-        logger.info(f"Starting single ticker processing for {symbol.symbol} on {symbol.exchange_name}")
-
-        try:
-            # Initialize ticker manager
-            self._ticker_manager = TickerManager()
-
-            # Create single exchange handler
-            handler = ExchangeHandler(symbol.exchange_name, [symbol.symbol])
-
-            async def ticker_callback(ticker_data):
-                if self._ticker_manager:
-                    await self._ticker_manager.process_ticker(symbol.exchange_name, ticker_data)
-
-            handler.set_ticker_callback(ticker_callback)
-            await handler.start()
-
-            self._exchange_handlers[symbol.exchange_name] = handler
-
-            # Register process
-            await self._register_process()
-
-            self._running = True
-            self._status = DaemonStatus.RUNNING
-
-            logger.info(f"Single ticker processing started for {symbol.symbol}")
-
-        except Exception as e:
-            logger.error(f"Failed to start single ticker processing: {e}")
-            self._status = DaemonStatus.ERROR
-            raise
 
     async def _register_process(self) -> None:
         """Register process for health monitoring."""
@@ -232,10 +168,11 @@ class TickerDaemon:
                     process_type=ProcessType.TICK,
                     component="ticker_daemon",
                     params={"daemon_id": id(self)},
-                    message="Started"
+                    message="Started",
+                    status=ProcessStatus.STARTING,
                 )
         except Exception as e:
-            logger.error(f"Failed to register process: {e}")
+            logger.error("Failed to register process", error=str(e))
 
     async def _unregister_process(self) -> None:
         """Unregister process."""
@@ -246,6 +183,6 @@ class TickerDaemon:
             async with ProcessCache() as cache:
                 await cache.delete_from_top(component="ticker_service:ticker_daemon")
         except Exception as e:
-            logger.error(f"Failed to unregister process: {e}")
+            logger.error("Failed to unregister process", error=str(e))
         finally:
             self._process_id = None

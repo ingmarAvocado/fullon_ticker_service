@@ -2,11 +2,12 @@
 """
 Single Ticker Loop Example
 
-This example demonstrates the simplest possible usage of fullon_ticker_service:
+This example demonstrates collecting exactly 10 tickers then exiting:
 1. Get a symbol from the database (prefers kraken/hyperliquid which work without API keys)
 2. Start processing just that one ticker
-3. Loop forever reading and printing ticker data from cache
-4. Handle Ctrl+C gracefully
+3. Collect and count tickers until we reach 10
+4. Stop the daemon and exit cleanly
+5. Handle Ctrl+C gracefully for early termination
 
 Usage:
     python single_ticker_loop_example.py [exchange_name]
@@ -84,8 +85,8 @@ async def main(preferred_exchange=None):
         print(f"⚙️ Starting ticker processing for {symbol.symbol}...")
         await daemon.process_ticker(symbol=symbol)
 
-        print(f"✅ Ticker processing started! Reading from cache every 3 seconds...")
-        print("🛑 Press Ctrl+C to stop")
+        print("✅ Ticker processing started! Collecting 10 tickers then exiting...")
+        print("🛑 Press Ctrl+C to stop early")
 
         # Set up graceful shutdown
         shutdown_event = asyncio.Event()
@@ -97,21 +98,28 @@ async def main(preferred_exchange=None):
         signal.signal(signal.SIGINT, signal_handler)
         signal.signal(signal.SIGTERM, signal_handler)
 
-        # Main loop: read from cache and print
-        while not shutdown_event.is_set():
+        # Main loop: read from cache and print until we get 10 tickers
+        ticker_count = 0
+        while not shutdown_event.is_set() and ticker_count < 10:
             try:
                 async with TickCache() as cache:
                     tick = await cache.get_ticker(symbol.symbol, symbol.exchange_name)
                     if tick:
                         volume = tick.volume if tick.volume is not None else 0.0
-                        print(f"📈 {symbol.symbol}: ${tick.price:.6f} (vol: {volume:.2f})")
+                        ticker_count += 1
+                        print(f"📈 [{ticker_count}/10] {symbol.symbol}: ${tick.price:.6f} (vol: {volume:.2f})")
+
+                        # Check if we've reached 10 tickers
+                        if ticker_count >= 10:
+                            print(f"🎯 Collected {ticker_count} tickers! Stopping...")
+                            break
                     else:
                         print(f"⏳ Waiting for ticker data for {symbol.symbol}...")
 
                 # Wait 3 seconds or until shutdown
                 try:
                     await asyncio.wait_for(shutdown_event.wait(), timeout=3.0)
-                except asyncio.TimeoutError:
+                except TimeoutError:
                     continue  # Normal timeout, continue loop
 
             except Exception as e:

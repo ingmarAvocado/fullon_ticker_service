@@ -62,14 +62,11 @@ async def show_system_status():
         print(f"🚀 Daemon Status: {status} {'🟢' if running else '🔴'}")
 
         # Show exchange statuses
-        exchanges = health.get('exchanges', {})
+        exchanges = health.get('exchanges', [])  # ← Changed {} to []
         if exchanges:
             print(f"📡 Exchange Connections ({len(exchanges)}):")
-            for ex_name, ex_health in exchanges.items():
-                connected = ex_health.get('connected', False)
-                status_icon = "🟢" if connected else "🔴"
-                reconnects = ex_health.get('reconnects', 0)
-                print(f"  {status_icon} {ex_name} (reconnects: {reconnects})")
+            for ex_name in exchanges:  # ← Simple iteration over list
+                print(f"  🟢 {ex_name}")  # ← Just show exchange name (all are connected if in list)
 
         # Show ticker statistics
         ticker_stats = health.get('ticker_stats', {})

@@ -14,36 +14,47 @@ from fullon_ticker_service.daemon import TickerDaemon
 @pytest.mark.asyncio
 async def test_daemon_uses_exchange_attributes():
     """Test that daemon correctly accesses cat exchange object attributes."""
-    daemon = TickerDaemon()
+    from fullon_exchange.queue import ExchangeQueue
 
-    with patch('fullon_ticker_service.daemon.DatabaseContext') as mock_db:
-        # Create real Exchange ORM objects
-        exchange = Exchange()
-        exchange.ex_id = 1
-        exchange.cat_ex_id = 1
-        exchange.name = "test_exchange"
-        exchange.uid = 1
+    # Initialize factory
+    await ExchangeQueue.initialize_factory()
 
-        # Mock database context
-        mock_ctx = AsyncMock()
-        mock_db.return_value.__aenter__.return_value = mock_ctx
-        mock_ctx.users.get_user_id.return_value = 1
-        mock_ctx.exchanges.get_user_exchanges.return_value = [exchange]
+    try:
+        daemon = TickerDaemon()
 
-        # Mock cat_exchanges
-        cat_exchange = MagicMock()
-        cat_exchange.cat_ex_id = 1
-        cat_exchange.name = "binance"
-        mock_ctx.exchanges.get_cat_exchanges.return_value = [cat_exchange]
+        with patch('fullon_ticker_service.daemon.DatabaseContext') as mock_daemon_db, \
+             patch('fullon_ticker_service.ticker.live_collector.DatabaseContext') as mock_collector_db:
+            # Create real Exchange ORM objects
+            exchange = Exchange()
+            exchange.ex_id = 1
+            exchange.cat_ex_id = 1
+            exchange.name = "test_exchange"
+            exchange.uid = 1
 
-        # Mock symbols
-        mock_ctx.symbols.get_all.return_value = []
+            # Mock cat_exchange relationship
+            cat_exchange = MagicMock()
+            cat_exchange.cat_ex_id = 1
+            cat_exchange.name = "binance"
+            exchange.cat_exchange = cat_exchange
 
-        # This should not raise AttributeError
-        await daemon.start()
+            # Mock daemon's database context (only loads symbols)
+            mock_daemon_ctx = AsyncMock()
+            mock_daemon_db.return_value.__aenter__.return_value = mock_daemon_ctx
+            mock_daemon_ctx.symbols.get_all.return_value = []
 
-        # Verify get_cat_exchanges was called (daemon uses cat exchanges now)
-        mock_ctx.exchanges.get_cat_exchanges.assert_called_once_with(all=False)
+            # Mock collector's database context (loads admin exchanges)
+            mock_collector_ctx = AsyncMock()
+            mock_collector_db.return_value.__aenter__.return_value = mock_collector_ctx
+            mock_collector_ctx.users.get_user_id.return_value = 1
+            mock_collector_ctx.exchanges.get_user_exchanges.return_value = [exchange]
+
+            # This should not raise AttributeError
+            await daemon.start()
+
+            # Verify symbols.get_all was called by daemon
+            mock_daemon_ctx.symbols.get_all.assert_called_once()
+    finally:
+        await ExchangeQueue.shutdown_factory()
 
 
 @pytest.mark.asyncio

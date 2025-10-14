@@ -6,8 +6,7 @@ to collect real-time cryptocurrency ticker data from exchanges and store them in
 """
 
 from .daemon import TickerDaemon
-from .exchange_handler import ExchangeHandler
-from .ticker_manager import TickerManager
+from .ticker.live_collector import LiveTickerCollector
 
 __version__ = "0.1.0"
-__all__ = ["TickerDaemon", "ExchangeHandler", "TickerManager"]
+__all__ = ["TickerDaemon", "LiveTickerCollector"]

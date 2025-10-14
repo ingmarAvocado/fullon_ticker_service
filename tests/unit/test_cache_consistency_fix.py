@@ -9,7 +9,7 @@ caused only 1 exchange to be found during pipeline operations.
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from fullon_ticker_service.daemon import TickerDaemon, DaemonStatus
+from fullon_ticker_service.daemon import TickerDaemon
 
 
 class TestCacheConsistencyFix:
@@ -28,7 +28,7 @@ class TestCacheConsistencyFix:
         daemon = TickerDaemon()
 
         with patch('fullon_ticker_service.daemon.DatabaseContext') as mock_db_context, \
-             patch('fullon_ticker_service.daemon.ExchangeHandler') as mock_handler_class, \
+             patch('fullon_ticker_service.daemon.LiveTickerCollector') as mock_collector_class, \
              patch.object(daemon, '_register_process'):
 
             # Mock database context
@@ -72,13 +72,9 @@ class TestCacheConsistencyFix:
             # CRITICAL: Return all symbols via get_all()
             mock_db.symbols.get_all.return_value = all_symbols
 
-            # Mock handler creation
-            mock_handlers = []
-            def create_handler(*args, **kwargs):
-                handler = AsyncMock()
-                mock_handlers.append(handler)
-                return handler
-            mock_handler_class.side_effect = create_handler
+            # Mock collector creation
+            mock_collector = AsyncMock()
+            mock_collector_class.return_value = mock_collector
 
             # Start the daemon (simulating pipeline operation)
             await daemon.start()
@@ -92,37 +88,15 @@ class TestCacheConsistencyFix:
             assert not hasattr(mock_db.symbols.get_by_exchange_id, 'called') or \
                    not mock_db.symbols.get_by_exchange_id.called
 
-            # 3. Must successfully start ALL 3 exchanges
-            assert len(daemon._exchange_handlers) == 3
-            assert "binance" in daemon._exchange_handlers
-            assert "kraken" in daemon._exchange_handlers
-            assert "hyperliquid" in daemon._exchange_handlers
+            # 3. Must create collector with all symbols
+            mock_collector_class.assert_called_once_with(symbols=all_symbols)
 
-            # 4. Each exchange must have the correct symbols
-            handler_calls = mock_handler_class.call_args_list
-            assert len(handler_calls) == 3
-
-            # Verify binance handler
-            binance_call = handler_calls[0]
-            assert binance_call.args[0] == "binance"
-            assert len(binance_call.args[1]) == 5
-            assert set(binance_call.args[1]) == {"BTC/USDT", "ETH/USDT", "SOL/USDT", "MATIC/USDT", "ADA/USDT"}
-
-            # Verify kraken handler
-            kraken_call = handler_calls[1]
-            assert kraken_call.args[0] == "kraken"
-            assert len(kraken_call.args[1]) == 5
-            assert set(kraken_call.args[1]) == {"BTC/USD", "ETH/USD", "SOL/USD", "MATIC/USD", "ADA/USD"}
-
-            # Verify hyperliquid handler
-            hyperliquid_call = handler_calls[2]
-            assert hyperliquid_call.args[0] == "hyperliquid"
-            assert len(hyperliquid_call.args[1]) == 5
-            assert set(hyperliquid_call.args[1]) == {"BTC/USD", "ETH/USD", "SOL/USD", "ARB/USD", "OP/USD"}
+            # 5. Must start collection
+            mock_collector.start_collection.assert_called_once()
 
             # 5. Daemon must be running successfully
             assert daemon.is_running()
-            assert daemon._status == DaemonStatus.RUNNING
+            assert daemon._status == "running"
 
             # Clean up
             await daemon.stop()
@@ -138,7 +112,7 @@ class TestCacheConsistencyFix:
         daemon = TickerDaemon()
 
         with patch('fullon_ticker_service.daemon.DatabaseContext') as mock_db_context, \
-             patch('fullon_ticker_service.daemon.ExchangeHandler') as mock_handler_class, \
+             patch('fullon_ticker_service.daemon.LiveTickerCollector') as mock_collector_class, \
              patch.object(daemon, '_register_process'):
 
             # Mock database context
@@ -173,8 +147,8 @@ class TestCacheConsistencyFix:
                     all_symbols.append(mock_symbol)
             mock_db.symbols.get_all.return_value = all_symbols
 
-            # Mock handler creation
-            mock_handler_class.return_value = AsyncMock()
+            # Mock collector creation
+            mock_collector_class.return_value = AsyncMock()
 
             # Start daemon
             await daemon.start()
@@ -186,8 +160,10 @@ class TestCacheConsistencyFix:
             assert not hasattr(mock_db.symbols.get_by_exchange_id, 'called') or \
                    not mock_db.symbols.get_by_exchange_id.called
 
-            # All 10 exchanges should be loaded
-            assert len(daemon._exchange_handlers) == 10
+            # Collector should be created with all symbols
+            mock_collector_class.assert_called_once()
+            collector_call = mock_collector_class.call_args
+            assert len(collector_call[1]['symbols']) == 50  # 10 exchanges * 5 symbols each
 
             # Clean up
             await daemon.stop()
@@ -203,7 +179,7 @@ class TestCacheConsistencyFix:
         daemon = TickerDaemon()
 
         with patch('fullon_ticker_service.daemon.DatabaseContext') as mock_db_context, \
-             patch('fullon_ticker_service.daemon.ExchangeHandler') as mock_handler_class, \
+             patch('fullon_ticker_service.daemon.LiveTickerCollector') as mock_collector_class, \
              patch.object(daemon, '_register_process'):
 
             # Mock database context
@@ -250,8 +226,8 @@ class TestCacheConsistencyFix:
 
             mock_db.symbols.get_all.side_effect = simulate_cache_change
 
-            # Mock handler creation
-            mock_handler_class.return_value = AsyncMock()
+            # Mock collector creation
+            mock_collector_class.return_value = AsyncMock()
 
             # Start daemon
             await daemon.start()
@@ -260,8 +236,10 @@ class TestCacheConsistencyFix:
             assert call_count == 1
             assert mock_db.symbols.get_all.call_count == 1
 
-            # All exchanges should be loaded with consistent data
-            assert len(daemon._exchange_handlers) == 3
+            # Collector should be created with consistent data
+            mock_collector_class.assert_called_once()
+            collector_call = mock_collector_class.call_args
+            assert len(collector_call[1]['symbols']) == 3
 
             # Clean up
             await daemon.stop()
