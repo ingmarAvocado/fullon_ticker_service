@@ -1251,7 +1251,7 @@ files = [
 
 [[package]]
 name = "fullon-cache"
-version = "0.5.9"
+version = "0.5.10"
 description = "Cache module for Fullon trading system"
 optional = false
 python-versions = ">=3.13,<4.0"
@@ -1272,11 +1272,11 @@ uvloop = ["uvloop (>=0.20.0) ; sys_platform != \"win32\""]
 type = "git"
 url = "ssh://git@github.com/ingmarAvocado/fullon_cache.git"
 reference = "main"
-resolved_reference = "52e0b8336fe31238f5f62d0632444007bdf87d4a"
+resolved_reference = "e0810c40efef318fcf2e2e2667bec8ea6cb064bc"
 
 [[package]]
 name = "fullon-credentials"
-version = "0.1.4"
+version = "0.1.5"
 description = "Secure credential resolver service for fullon ecosystem with Google Secrets Manager and .env fallback"
 optional = false
 python-versions = ">=3.13,<4.0"
@@ -1298,11 +1298,11 @@ dev = ["black (>=23.0.0)", "google-cloud-testutils (>=1.3.0)", "mypy (>=1.5.0)",
 type = "git"
 url = "ssh://git@github.com/ingmarAvocado/fullon_credentials.git"
 reference = "main"
-resolved_reference = "19d37deb230bce7f75f5e575ebe14b3a0aa8b9da"
+resolved_reference = "623d0ae5d978a06e64b335e8d164dc08aa8c65a0"
 
 [[package]]
 name = "fullon-exchange"
-version = "1.4.2"
+version = "1.4.3"
 description = "Modern Python library for cryptocurrency exchange integration with advanced features"
 optional = false
 python-versions = ">=3.13,<4.0"
@@ -1330,11 +1330,11 @@ yfinance = "^0.2.40"
 type = "git"
 url = "ssh://git@github.com/ingmarAvocado/fullon_exchange.git"
 reference = "main"
-resolved_reference = "a161eea909310d12eddaacd9207031384cbb68cd"
+resolved_reference = "5831ed71adc4b69df4d4a6633d31a3d4feba0325"
 
 [[package]]
 name = "fullon-log"
-version = "1.1.8"
+version = "1.1.9"
 description = "Production-ready, simple loguru wrapper with gorgeous output for fullon projects"
 optional = false
 python-versions = ">=3.13,<4.0"
@@ -1349,11 +1349,11 @@ loguru = "^0.7.3"
 type = "git"
 url = "ssh://git@github.com/ingmarAvocado/fullon_log.git"
 reference = "main"
-resolved_reference = "f5099f9fd7b64c369024d2f95a268161b41bf38a"
+resolved_reference = "1ce8972ab5c6eecd8266dd7971dcb21b873e71fb"
 
 [[package]]
 name = "fullon-orm"
-version = "0.9.3"
+version = "0.9.4"
 description = "Async SQLAlchemy ORM for Fullon trading system"
 optional = false
 python-versions = ">=3.13,<4.0"
@@ -1377,7 +1377,7 @@ uvloop = "^0.21.0"
 type = "git"
 url = "ssh://git@github.com/ingmarAvocado/fullon_orm.git"
 reference = "main"
-resolved_reference = "e4ac1d7c739f24eb303276c1df366ff11b62567e"
+resolved_reference = "6c19bfe304638142d3d3b38f0324b420a7004a21"
 
 [[package]]
 name = "future"
