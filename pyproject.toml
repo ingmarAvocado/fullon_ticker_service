@@ -1,6 +1,6 @@
 [project]
 name = "fullon-ticker-service"
-version = "0.1.8"
+version = "0.1.9"
 description = "Async daemon service for real-time cryptocurrency ticker data collection using websockets"
 authors = [
     {name = "Ingmar Frey", email = "ingmar.frey@gmail.com"}
